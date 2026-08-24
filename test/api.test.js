@@ -82,6 +82,27 @@ describe('rest api', () => {
     assert.equal(after.body.filter((company) => company.id === 'acme-corp').length, acmeBefore);
   });
 
+  test('a person can be manually edited with contact and company details', async () => {
+    const { status, body } = await send('PATCH', '/api/people/alex-smith', {
+      name: 'Alex Smith-Jones',
+      company: 'Northwind Freight',
+      title: 'Partnerships Lead',
+      email: 'alex@northwind.example',
+      phone: '+61 400 123 456',
+      linkedin: 'https://www.linkedin.com/in/alex-smith-jones',
+      location: 'Sydney, Australia',
+    });
+
+    assert.equal(status, 200);
+    assert.equal(body.id, 'alex-smith');
+    assert.equal(body.name, 'Alex Smith-Jones');
+    assert.equal(body.companyId, 'northwind-freight');
+    assert.equal(body.title, 'Partnerships Lead');
+    assert.equal(body.email, 'alex@northwind.example');
+    assert.equal(body.phone, '+61 400 123 456');
+    assert.equal(body.location, 'Sydney, Australia');
+  });
+
   test('people board stages are linked to todos and advance together', async () => {
     const board = await get('/api/people-board');
     const jane = board.body.columns.flatMap((column) => column.people).find((person) => person.id === 'jane-doe');

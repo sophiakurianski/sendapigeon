@@ -217,6 +217,8 @@ a:hover { text-decoration: underline; }
 }
 
 .topbar {
+  position: relative;
+  z-index: 30;
   display: flex;
   align-items: center;
   gap: 20px;
@@ -270,6 +272,7 @@ a:hover { text-decoration: underline; }
   right: 0;
   max-height: 62vh;
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--card);
   border: 1px solid var(--hair);
   border-radius: var(--r-md);
@@ -299,7 +302,7 @@ a:hover { text-decoration: underline; }
 .result-title { font-size: 13.5px; font-weight: 500; }
 .result-sub { font-size: 12px; color: var(--wing); }
 
-.content { flex: 1; min-height: 0; overflow: auto; padding: 28px 32px 72px; }
+.content { position: relative; z-index: 1; flex: 1; min-height: 0; overflow: auto; padding: 28px 32px 72px; }
 
 /* --------------------------------------------------------------- monogram */
 
@@ -1169,6 +1172,22 @@ a:hover { text-decoration: underline; }
   gap: 13px;
 }
 
+.drawer-actions { margin-left: auto; }
+.drawer-actions + .drawer-close { margin-left: 0; }
+.drawer-edit {
+  min-height: 31px;
+  padding: 5px 11px;
+  border: 1px solid var(--hair);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--wing);
+  box-shadow: var(--lift-1);
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.drawer-edit:hover,
+.drawer-edit[aria-pressed='true'] { border-color: var(--dove); background: var(--sunk); color: var(--teal); }
+
 .drawer-title {
   font-family: var(--font-display);
   font-size: 23px;
@@ -1206,6 +1225,41 @@ a:hover { text-decoration: underline; }
 .facts { display: grid; grid-template-columns: 104px 1fr; gap: 7px 14px; margin: 0 0 20px; }
 .facts dt { font-size: 12.5px; color: var(--wing); padding-top: 1px; }
 .facts dd { margin: 0; font-size: 13.5px; }
+
+.person-edit-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: -2px 0 22px;
+  padding: 16px;
+  border: 1px solid var(--hair);
+  border-radius: 15px;
+  background: var(--card);
+  box-shadow: var(--lift-1);
+  animation: settle 160ms ease both;
+}
+.person-edit-intro,
+.person-edit-company,
+.person-edit-wide,
+.person-edit-actions { grid-column: 1 / -1; }
+.person-edit-intro { padding-bottom: 2px; }
+.person-edit-intro p { margin: 3px 0 0; color: var(--wing); font-size: 11.5px; line-height: 1.45; }
+.person-edit-form > label { position: relative; display: grid; gap: 5px; min-width: 0; }
+.person-edit-form > label > span { color: var(--wing); font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.person-edit-form input {
+  width: 100%;
+  height: 38px;
+  padding: 7px 10px;
+  border: 1px solid var(--hair);
+  border-radius: 9px;
+  background: var(--canvas);
+  font: inherit;
+  font-size: 12.5px;
+}
+.person-edit-form input:focus { border-color: var(--teal); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 12%, transparent); }
+.person-edit-form input::placeholder { color: var(--dove); }
+.person-edit-form label > small { min-height: 15px; font-size: 10px; }
+.person-edit-actions { display: flex; justify-content: flex-end; gap: 7px; padding-top: 3px; }
 
 .section-title {
   font-family: var(--font-display);
@@ -1450,6 +1504,10 @@ a:hover { text-decoration: underline; }
   .add-column-button { margin-left: 28px; }
   .grid { grid-template-columns: 1fr; }
   .drawer { width: 100vw; }
+  .drawer-head { padding-left: 18px; padding-right: 16px; }
+  .drawer-body { padding-left: 18px; padding-right: 18px; }
+  .person-edit-form { grid-template-columns: 1fr; padding: 14px; }
+  .person-edit-form > * { grid-column: 1 !important; }
   .person-contact { display: none; }
   .people-controls > .segmented { width: 100%; }
   .people-controls > .segmented button { flex: 1; }

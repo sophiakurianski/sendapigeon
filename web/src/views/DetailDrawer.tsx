@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   api,
+  type Company,
   type CompanyDetail,
   type DealDetail,
   type Note,
@@ -197,26 +198,44 @@ function PersonPanel({
   notify: (text: string, error?: boolean) => void;
   reload: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+
   return (
     <Drawer
       kicker="Contact"
       title={person.name}
       badge={<Monogram name={person.name} id={person.id} size="lg" />}
+      actions={(
+        <button className="drawer-edit" onClick={() => setEditing((current) => !current)} aria-pressed={editing}>
+          {editing ? 'Cancel edit' : 'Edit'}
+        </button>
+      )}
       onClose={onClose}
     >
-      <Facts
-        rows={[
-          ['Company', person.company ? <a href="#/companies" onClick={() => onSelect({ kind: 'company', id: person.company!.id })}>{person.company.name}</a> : null],
-          ['Role', person.title],
-          ['Email', person.email ? <a href={`mailto:${person.email}`}>{person.email}</a> : null],
-          ['Phone', person.phone ? <a href={`tel:${person.phone.replace(/\s/g, '')}`}>{person.phone}</a> : null],
-          ['LinkedIn', person.linkedin ? <a href={person.linkedin} target="_blank" rel="noreferrer">{person.linkedin}</a> : null],
-          ['Location', person.location],
-          ['Owner', person.owner],
-          ['Tags', (person.tags ?? []).map((t) => <span className="tag" key={t}>{t}</span>)],
-        ]}
-      />
-      {person.description && <p>{person.description}</p>}
+      {editing ? (
+        <PersonEditForm
+          person={person}
+          notify={notify}
+          onCancel={() => setEditing(false)}
+          onSaved={() => { setEditing(false); reload(); }}
+        />
+      ) : (
+        <>
+          <Facts
+            rows={[
+              ['Company', person.company ? <a href="#/companies" onClick={() => onSelect({ kind: 'company', id: person.company!.id })}>{person.company.name}</a> : null],
+              ['Role', person.title],
+              ['Email', person.email ? <a href={`mailto:${person.email}`}>{person.email}</a> : null],
+              ['Phone', person.phone ? <a href={`tel:${person.phone.replace(/\s/g, '')}`}>{person.phone}</a> : null],
+              ['LinkedIn', person.linkedin ? <a href={person.linkedin} target="_blank" rel="noreferrer">{person.linkedin}</a> : null],
+              ['Location', person.location],
+              ['Owner', person.owner],
+              ['Tags', (person.tags ?? []).map((t) => <span className="tag" key={t}>{t}</span>)],
+            ]}
+          />
+          {person.description && <p>{person.description}</p>}
+        </>
+      )}
 
       <PersonStageProgress person={person} notify={notify} reload={reload} />
       <ContactTodoComposer person={person} notify={notify} reload={reload} />
@@ -240,6 +259,128 @@ function PersonPanel({
         composer={<NoteComposer association={{ attendees: [person.id], companyId: person.company?.id }} subject={person.name} notify={notify} reload={reload} />}
       />
     </Drawer>
+  );
+}
+
+function PersonEditForm({ person, notify, onCancel, onSaved }: {
+  person: PersonDetail;
+  notify: (text: string, error?: boolean) => void;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(person.name);
+  const [company, setCompany] = useState(person.company?.name ?? '');
+  const [title, setTitle] = useState(person.title ?? '');
+  const [email, setEmail] = useState(person.email ?? '');
+  const [phone, setPhone] = useState(person.phone ?? '');
+  const [linkedin, setLinkedin] = useState(person.linkedin ?? '');
+  const [location, setLocation] = useState(person.location ?? '');
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyFocused, setCompanyFocused] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api.companies().then(setCompanies).catch(() => setCompanies([]));
+  }, []);
+
+  const companyNeedle = company.trim().toLowerCase();
+  const exactCompany = companies.find((item) => item.name.toLowerCase() === companyNeedle);
+  const suggestions = companyNeedle
+    ? companies.filter((item) => item.name.toLowerCase().includes(companyNeedle)).slice(0, 6)
+    : companies.slice(0, 6);
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!name.trim() || busy) {
+      if (!name.trim()) setError('Name is required.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const updated = await api.updatePerson(person.id, {
+        name: name.trim(),
+        company: exactCompany?.name ?? company.trim(),
+        title: title.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        linkedin: linkedin.trim(),
+        location: location.trim(),
+      });
+      notify(`${updated.name} updated`);
+      onSaved();
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="person-edit-form" onSubmit={(event) => void save(event)}>
+      <div className="person-edit-intro">
+        <div className="drawer-kicker">Edit contact</div>
+        <p>Update the person here. Choosing an existing company keeps the records linked; a new name creates a company.</p>
+      </div>
+      <label>
+        <span>Name</span>
+        <input value={name} onChange={(event) => setName(event.target.value)} required autoFocus />
+      </label>
+      <label>
+        <span>Role</span>
+        <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Industrial Designer" />
+      </label>
+      <label className="person-edit-company">
+        <span>Company</span>
+        <input
+          value={company}
+          onChange={(event) => setCompany(event.target.value)}
+          onFocus={() => setCompanyFocused(true)}
+          onBlur={() => window.setTimeout(() => setCompanyFocused(false), 120)}
+          placeholder="Search or create a company"
+          role="combobox"
+          aria-expanded={companyFocused && suggestions.length > 0}
+          aria-autocomplete="list"
+        />
+        {companyFocused && suggestions.length > 0 && (
+          <span className="company-suggestions" role="listbox">
+            {suggestions.map((item) => (
+              <button type="button" key={item.id} role="option" onMouseDown={() => setCompany(item.name)}>
+                <span>{item.name}</span>
+                <small>{[item.industry, item.location].filter(Boolean).join(' · ') || 'Existing company'}</small>
+              </button>
+            ))}
+          </span>
+        )}
+        {company.trim() && (
+          <small className={exactCompany ? 'company-match existing' : 'company-match new'}>
+            {exactCompany ? `Linked to ${exactCompany.name}` : `Creates a new company named “${company.trim()}”`}
+          </small>
+        )}
+      </label>
+      <label>
+        <span>Email</span>
+        <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@company.com" />
+      </label>
+      <label>
+        <span>Phone</span>
+        <input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+61 400 000 000" />
+      </label>
+      <label className="person-edit-wide">
+        <span>LinkedIn</span>
+        <input type="url" value={linkedin} onChange={(event) => setLinkedin(event.target.value)} placeholder="https://linkedin.com/in/name" />
+      </label>
+      <label className="person-edit-wide">
+        <span>Location</span>
+        <input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Sydney, Australia" />
+      </label>
+      {error && <div className="form-error person-edit-wide" role="alert">{error}</div>}
+      <div className="person-edit-actions">
+        <button type="button" className="btn ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+      </div>
+    </form>
   );
 }
 

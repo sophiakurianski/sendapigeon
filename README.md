@@ -38,6 +38,43 @@ then a `.sendapigeon` folder found by walking up from the working directory,
 then `~/.sendapigeonrc`, then `~/SendAPigeon`. Committing a `.sendapigeon`
 folder into a repo gives that repo its own CRM.
 
+## Give SendAPigeon to your agent
+
+After `pigeon init`, the vault contains an `AGENTS.md` written specifically for
+agents. It explains the records, relationships, available commands and rules
+for making safe changes. Give an agent access in three steps:
+
+1. Point the agent at your vault folder, or add the vault to its workspace.
+2. Tell it to read `AGENTS.md` before touching CRM data.
+3. Give it either the `pigeon` CLI on its `PATH` or the MCP server described in
+   [Agents](#agents). MCP is the easiest option for agents that support tools;
+   the CLI works with any coding agent that can use a shell.
+
+You can paste this as the agent's first instruction:
+
+```text
+Use SendAPigeon as my CRM. Read the AGENTS.md in the vault first. Use the
+pigeon MCP tools or the pigeon CLI for all writes so activity is recorded.
+Start by showing me the current stats, overdue todos and people board. Before
+creating a duplicate person or company, search for an existing record. Record
+your name as the actor on every change.
+```
+
+For a shell-only agent, launch it with the vault location and actor name:
+
+```bash
+PIGEON_VAULT=~/SendAPigeon PIGEON_ACTOR=my-agent your-agent-command
+```
+
+For a repo-specific CRM, initialise `.sendapigeon` in the repository. Agents
+working in that repository will discover it automatically:
+
+```bash
+pigeon init .sendapigeon
+```
+
+Run `pigeon agents` at any time to print the generated agent instructions.
+
 ## What is on disk
 
 ```
@@ -204,7 +241,7 @@ friends are all understood, and companies referenced by name are created.
 ```bash
 npm run dev          # API on :4477 against your default vault
 npm run dev:web      # Vite on :4478, proxying /api to :4477
-npm test             # 37 tests over the core, the file format and the REST API
+npm test             # 46 tests over the core, the file format and the REST API
 npm run typecheck
 ```
 

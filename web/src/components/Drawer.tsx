@@ -4,12 +4,14 @@ export function Drawer({
   kicker,
   title,
   badge,
+  actions,
   onClose,
   children,
 }: {
   kicker: string;
   title: string;
   badge?: ReactNode;
+  actions?: ReactNode;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -31,6 +33,7 @@ export function Drawer({
             <div className="drawer-kicker">{kicker}</div>
             <h2 className="drawer-title">{title}</h2>
           </div>
+          {actions ? <div className="drawer-actions">{actions}</div> : null}
           <button className="drawer-close" onClick={onClose} aria-label="Close">
             ×
           </button>
