@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "sendapigeon": {
+      "command": "node",
+      "args": ["dist/mcp/index.js"],
+      "env": {
+        "PIGEON_ACTOR": "claude-code"
+      }
+    }
+  }
+}

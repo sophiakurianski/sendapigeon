@@ -1,0 +1,60 @@
+{
+  "name": "sendapigeon",
+  "version": "0.1.0",
+  "description": "Agent-first, headless, file-based CRM. People, companies, deals, todos and meeting notes in a portable vault.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "pigeon": "./dist/cli/index.js",
+    "sendapigeon": "./dist/cli/index.js"
+  },
+  "main": "./dist/core/index.js",
+  "exports": {
+    ".": "./dist/core/index.js",
+    "./mcp": "./dist/mcp/index.js"
+  },
+  "files": [
+    "dist",
+    "web/dist",
+    "docs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "tsc -p tsconfig.json",
+    "build:web": "node web/checktokens.mjs && vite build web",
+    "dev": "tsx watch src/server/index.ts",
+    "dev:web": "vite web",
+    "cli": "tsx src/cli/index.ts",
+    "mcp": "tsx src/mcp/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.js",
+    "check:tokens": "node web/checktokens.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "commander": "^12.1.0",
+    "express": "^4.21.2",
+    "gray-matter": "^4.0.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "esbuild@0.25.12": true
+  }
+}
