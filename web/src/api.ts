@@ -35,6 +35,13 @@ export const api = {
   config: () => request<Config>('/config'),
   stats: () => request<Stats>('/stats'),
   board: (params?: Record<string, unknown>) => request<Board>(`/board${qs(params)}`),
+  peopleBoard: (board?: string) => request<PersonBoard>(`/people-board${qs({ board })}`),
+  createPeopleBoard: (input: { name: string; stages: Pick<Stage, 'name'>[] }) =>
+    request<PeopleBoardTemplate>('/people-boards', { method: 'POST', body: JSON.stringify(input) }),
+  updatePeopleBoard: (id: string, patch: { name?: string; stages?: Stage[] }) =>
+    request<PeopleBoardTemplate>(`/people-boards/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deletePeopleBoard: (id: string) =>
+    request<PeopleBoardTemplate>(`/people-boards/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   search: (q: string) => request<Hit[]>(`/search${qs({ q })}`),
   activity: (limit = 40) => request<ActivityEvent[]>(`/activity${qs({ limit })}`),
 
@@ -43,10 +50,18 @@ export const api = {
 
   people: (params?: Record<string, unknown>) => request<Person[]>(`/people${qs(params)}`),
   person: (id: string) => request<PersonDetail>(`/people/${encodeURIComponent(id)}`),
-  createPerson: (input: { name: string; company?: string; companyId?: string; linkedin?: string }) =>
+  createPerson: (input: { name: string; company?: string; companyId?: string; linkedin?: string; boardId?: string }) =>
     request<Person>('/people', { method: 'POST', body: JSON.stringify(input) }),
   updatePerson: (id: string, patch: Partial<Person> & { company?: string }) =>
     request<Person>(`/people/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  movePersonBoard: (id: string, boardId: string) =>
+    request<{ person: Person; todo: Todo }>(`/people/${encodeURIComponent(id)}/board`, { method: 'POST', body: JSON.stringify({ boardId }) }),
+  advancePersonStage: (id: string) =>
+    request<{ person: Person; completed: Todo; next: Todo | null }>(`/people/${encodeURIComponent(id)}/stage/advance`, { method: 'POST', body: '{}' }),
+  movePersonStage: (id: string, stage: string) =>
+    request<{ person: Person; todo: Todo }>(`/people/${encodeURIComponent(id)}/stage/move`, { method: 'POST', body: JSON.stringify({ stage }) }),
+  ensurePersonStage: (id: string) =>
+    request<Todo>(`/people/${encodeURIComponent(id)}/stage/ensure`, { method: 'POST', body: '{}' }),
 
   deals: (params?: Record<string, unknown>) => request<Deal[]>(`/deals${qs(params)}`),
   deal: (id: string) => request<DealDetail>(`/deals/${encodeURIComponent(id)}`),
@@ -71,7 +86,8 @@ export const api = {
 // ------------------------------------------------------------------- types
 
 export interface Stage { id: string; name: string; probability?: number }
-export interface Config { name: string; currency: string; stages: Stage[] }
+export interface PeopleBoardTemplate { id: string; name: string; stages: Stage[] }
+export interface Config { name: string; currency: string; stages: Stage[]; peopleBoards: PeopleBoardTemplate[] }
 
 export interface Company {
   id: string; name: string; domain?: string; website?: string; industry?: string;
@@ -81,7 +97,7 @@ export interface Company {
 
 export interface Person {
   id: string; name: string; companyId?: string; title?: string; email?: string; phone?: string;
-  linkedin?: string; location?: string; owner?: string; description?: string;
+  linkedin?: string; boardId?: string; stage?: string; stageCompletedAt?: string; location?: string; owner?: string; description?: string;
   tags?: string[]; createdAt: string; updatedAt: string;
 }
 
@@ -95,7 +111,7 @@ export interface Deal {
 
 export interface Todo {
   id: string; title: string; done: boolean; dueDate?: string; priority?: 'low' | 'normal' | 'high';
-  companyId?: string; personId?: string; dealId?: string; owner?: string; notes?: string;
+  companyId?: string; personId?: string; dealId?: string; stageId?: string; boardId?: string; owner?: string; notes?: string;
   tags?: string[]; completedAt?: string; createdAt: string; updatedAt: string;
 }
 
@@ -121,6 +137,13 @@ export interface Board {
   lost: ExpandedDeal[];
   totals: { open: number; openValue: number; weightedValue: number; won: number; wonValue: number; lost: number };
 }
+
+export interface PersonBoardCard extends Person {
+  company?: { id: string; name: string } | null;
+  stageTodo?: Pick<Todo, 'id' | 'title' | 'done' | 'dueDate'> | null;
+}
+export interface PersonBoardColumn { id: string; name: string; people: PersonBoardCard[]; count: number }
+export interface PersonBoard { id: string; name: string; columns: PersonBoardColumn[]; total: number }
 
 export interface Stats {
   companies: number; people: number; notes: number; currency: string;

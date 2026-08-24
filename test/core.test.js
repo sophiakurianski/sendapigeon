@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import { Vault, VaultError } from '../dist/core/store.js';
 import { slugify, uniqueId, parseDate, toLocalDate } from '../dist/core/ids.js';
-import { board, listTodos, search, stats } from '../dist/core/query.js';
+import { board, listTodos, personBoard, search, stats } from '../dist/core/query.js';
 import { exportTable, parseCsv, importRows, exportBundle } from '../dist/core/export.js';
 
 function freshVault() {
@@ -82,6 +82,50 @@ describe('records', () => {
     assert.equal(person.id, 'jane-doe');
     assert.equal(person.companyId, 'acme-corp');
     assert.equal(vault.company('acme-corp').name, 'Acme Corp');
+    assert.equal(person.stage, 'lead');
+    assert.equal(vault.todos().find((todo) => todo.personId === person.id && todo.stageId === 'lead').done, false);
+  });
+
+  test('completing a person stage closes its todo and opens the next one', () => {
+    const result = vault.advancePersonStage('jane-doe', { actor: 'web' });
+    assert.equal(result.completed.stageId, 'lead');
+    assert.equal(result.completed.done, true);
+    assert.equal(result.person.stage, 'contacted');
+    assert.equal(result.next.stageId, 'contacted');
+    assert.equal(result.next.done, false);
+    assert.equal(vault.activity(10).some((event) => event.action === 'completed' && event.id === result.completed.id), true);
+  });
+
+  test('moving backward reopens a previously completed stage', () => {
+    vault.advancePersonStage('jane-doe');
+    const moved = vault.movePersonStage('jane-doe', 'contacted');
+    assert.equal(moved.person.stage, 'contacted');
+    assert.equal(moved.todo.stageId, 'contacted');
+    assert.equal(moved.todo.done, false);
+  });
+
+  test('custom people boards can be created, edited and assigned safely', () => {
+    const custom = vault.createPeopleBoard({
+      name: 'Partner outreach',
+      stages: [{ name: 'Introduce' }, { name: 'Check in' }],
+    });
+    assert.deepEqual(custom.stages.map((stage) => stage.id), ['introduce', 'check-in']);
+
+    const moved = vault.movePersonBoard('jane-doe', custom.id);
+    assert.equal(moved.person.boardId, custom.id);
+    assert.equal(moved.person.stage, 'introduce');
+    assert.equal(moved.todo.boardId, custom.id);
+    assert.equal(personBoard(vault, custom.id).total, 1);
+
+    assert.throws(
+      () => vault.updatePeopleBoard(custom.id, { stages: [{ id: 'check-in', name: 'Check in' }] }),
+      (error) => error.code === 'BAD_INPUT',
+    );
+
+    vault.movePersonStage('jane-doe', 'check-in');
+    const edited = vault.updatePeopleBoard(custom.id, { stages: [{ id: 'check-in', name: 'Follow up' }, { name: 'Close loop' }] });
+    assert.deepEqual(edited.stages.map((stage) => stage.name), ['Follow up', 'Close loop']);
+    assert.equal(vault.todos().find((todo) => todo.personId === 'jane-doe' && todo.boardId === custom.id && todo.stageId === 'check-in').title, 'Follow up');
   });
 
   test('lookups accept id, name or email', () => {

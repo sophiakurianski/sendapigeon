@@ -14,6 +14,7 @@ import {
   listNotes,
   listPeople,
   listTodos,
+  personBoard,
   search,
   stats,
   type ListFilter,
@@ -92,9 +93,9 @@ export function createApp(vaultPath: string) {
       version: '0.1.0',
       vault: vaultPath,
       endpoints: [
-        'GET /api/config', 'GET /api/stats', 'GET /api/board', 'GET /api/search?q=',
+        'GET /api/config', 'GET /api/stats', 'GET /api/board', 'GET /api/people-board', 'POST|PATCH|DELETE /api/people-boards', 'GET /api/search?q=',
         'GET|POST /api/companies', 'GET|PATCH|DELETE /api/companies/:id',
-        'GET|POST /api/people', 'GET|PATCH|DELETE /api/people/:id',
+        'GET|POST /api/people', 'GET|PATCH|DELETE /api/people/:id', 'POST /api/people/:id/stage/{ensure,advance,move}',
         'GET|POST /api/deals', 'GET|PATCH|DELETE /api/deals/:id',
         'POST /api/deals/:id/move', 'POST /api/deals/:id/win', 'POST /api/deals/:id/lose',
         'GET|POST /api/todos', 'GET|PATCH|DELETE /api/todos/:id', 'POST /api/todos/:id/toggle',
@@ -108,6 +109,10 @@ export function createApp(vaultPath: string) {
   api.patch('/config', wrap((req, _res, v) => v.setConfig(req.body)));
   api.get('/stats', wrap((_req, _res, v) => stats(v)));
   api.get('/board', wrap((req, _res, v) => board(v, parseFilter(req.query as Record<string, unknown>))));
+  api.get('/people-board', wrap((req, _res, v) => personBoard(v, typeof req.query.board === 'string' ? req.query.board : undefined)));
+  api.post('/people-boards', wrap((req, res, v) => { res.status(201); return v.createPeopleBoard(req.body); }));
+  api.patch('/people-boards/:id', wrap((req, _res, v) => v.updatePeopleBoard(req.params.id, req.body)));
+  api.delete('/people-boards/:id', wrap((req, _res, v) => v.deletePeopleBoard(req.params.id)));
   api.get('/activity', wrap((req, _res, v) => v.activity(Number(req.query.limit ?? 50))));
   api.get('/search', wrap((req, _res, v) => search(v, String(req.query.q ?? ''), Number(req.query.limit ?? 30))));
 
@@ -123,6 +128,10 @@ export function createApp(vaultPath: string) {
   api.post('/people', wrap((req, res, v) => { res.status(201); return v.createPerson(req.body, { createCompany: true }); }));
   api.get('/people/:id', wrap((req, _res, v) => expandPerson(v, v.requirePerson(req.params.id))));
   api.patch('/people/:id', wrap((req, _res, v) => v.updatePerson(req.params.id, req.body, { createCompany: true })));
+  api.post('/people/:id/board', wrap((req, _res, v) => v.movePersonBoard(req.params.id, String(req.body?.boardId ?? ''))));
+  api.post('/people/:id/stage/advance', wrap((req, _res, v) => v.advancePersonStage(req.params.id)));
+  api.post('/people/:id/stage/move', wrap((req, _res, v) => v.movePersonStage(req.params.id, String(req.body?.stage ?? ''))));
+  api.post('/people/:id/stage/ensure', wrap((req, _res, v) => v.ensurePersonStageTodo(req.params.id)));
   api.delete('/people/:id', wrap((req, _res, v) => v.deletePerson(req.params.id)));
 
   // deals

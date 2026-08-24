@@ -4,6 +4,7 @@ import {
   type CompanyDetail,
   type DealDetail,
   type Note,
+  type PeopleBoardTemplate,
   type PersonDetail,
   type Todo,
 } from '../api';
@@ -25,11 +26,12 @@ interface Props {
 }
 
 export function DetailDrawer({ selection, onClose, onSelect, notify, refresh }: Props) {
-  const [record, setRecord] = useState<unknown>(null);
+  const selectionKey = `${selection.kind}:${selection.id}`;
+  const [loaded, setLoaded] = useState<{ key: string; value: unknown } | null>(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    setRecord(null);
+    let cancelled = false;
     const load =
       selection.kind === 'deal' ? api.deal(selection.id)
       : selection.kind === 'person' ? api.person(selection.id)
@@ -40,16 +42,22 @@ export function DetailDrawer({ selection, onClose, onSelect, notify, refresh }: 
       onClose();
       return;
     }
-    load.then(setRecord).catch((e) => {
+    load.then((value) => {
+      if (!cancelled) setLoaded({ key: selectionKey, value });
+    }).catch((e) => {
+      if (cancelled) return;
       notify(e.message, true);
       onClose();
     });
-  }, [selection.kind, selection.id, tick, notify, onClose]);
+    return () => { cancelled = true; };
+  }, [selection.kind, selection.id, selectionKey, tick, notify, onClose]);
 
   const reload = () => {
     setTick((t) => t + 1);
     refresh();
   };
+
+  const record = loaded?.key === selectionKey ? loaded.value : null;
 
   if (!record) {
     return (
@@ -210,6 +218,7 @@ function PersonPanel({
       />
       {person.description && <p>{person.description}</p>}
 
+      <PersonStageProgress person={person} notify={notify} reload={reload} />
       <ContactTodoComposer person={person} notify={notify} reload={reload} />
 
       <SectionTitle aside={String(person.deals.length)}>Deals</SectionTitle>
@@ -328,26 +337,123 @@ function NotePanel({ note, onClose, onSelect }: { note: Note; onClose: () => voi
 
 // ------------------------------------------------------------------ shared
 
-function TodoList({ todos, notify, reload }: { todos: Todo[]; notify: (t: string, e?: boolean) => void; reload: () => void }) {
-  const toggle = async (todo: Todo) => {
+function PersonStageProgress({ person, notify, reload }: {
+  person: PersonDetail;
+  notify: (text: string, error?: boolean) => void;
+  reload: () => void;
+}) {
+  const [boards, setBoards] = useState<PeopleBoardTemplate[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.config().then((config) => setBoards(config.peopleBoards)).catch(() => setBoards([]));
+  }, []);
+
+  if (!boards.length) return null;
+  const board = boards.find((item) => item.id === person.boardId) ?? boards[0];
+  const stages = board.stages;
+  const currentId = person.stage ?? stages[0].id;
+  const currentIndex = Math.max(0, stages.findIndex((stage) => stage.id === currentId));
+
+  const complete = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
-      await api.toggleTodo(todo.id, !todo.done);
+      const result = await api.advancePersonStage(person.id);
+      const current = stages[currentIndex].name;
+      notify(result.next ? `${current} completed · ${result.next.title} added to To do` : `${current} completed and noted`);
       reload();
-    } catch (err) {
-      notify((err as Error).message, true);
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeBoard = async (boardId: string) => {
+    if (busy || boardId === board.id) return;
+    setBusy(true);
+    try {
+      const result = await api.movePersonBoard(person.id, boardId);
+      const destination = boards.find((item) => item.id === boardId);
+      notify(`${person.name} moved to ${destination?.name ?? boardId} · ${result.todo.title} added to To do`);
+      reload();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <>
-      <SectionTitle aside={`${todos.filter((t) => !t.done).length} open`}>To do</SectionTitle>
+      <SectionTitle aside={`${currentIndex + 1} of ${stages.length}`}>Board stages</SectionTitle>
+      <label className="person-board-picker">
+        <span>Workflow</span>
+        <select value={board.id} onChange={(event) => void changeBoard(event.target.value)} disabled={busy}>
+          {boards.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+      </label>
+      <div className="stage-progress">
+        {stages.map((stage, index) => {
+          const done = index < currentIndex || (index === currentIndex && Boolean(person.stageCompletedAt));
+          const active = index === currentIndex && !done;
+          return (
+            <button
+              key={stage.id}
+              className={done ? 'stage-step done' : active ? 'stage-step active' : 'stage-step'}
+              disabled={!active || busy}
+              onClick={() => void complete()}
+              aria-label={active ? `Complete ${stage.name}` : stage.name}
+            >
+              <span className="stage-step-check" aria-hidden="true">{done ? '✓' : active ? '' : index + 1}</span>
+              <span>{stage.name}</span>
+              {active && <small>{busy ? 'Noting…' : 'Tick to complete'}</small>}
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function TodoList({ todos, notify, reload }: { todos: Todo[]; notify: (t: string, e?: boolean) => void; reload: () => void }) {
+  const [visibleTodos, setVisibleTodos] = useState(todos);
+  const [pending, setPending] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => setVisibleTodos(todos), [todos]);
+
+  const toggle = async (todo: Todo) => {
+    if (pending.has(todo.id)) return;
+    const done = !todo.done;
+    setVisibleTodos((current) => current.map((item) => item.id === todo.id ? { ...item, done } : item));
+    setPending((current) => new Set(current).add(todo.id));
+    try {
+      await api.toggleTodo(todo.id, done);
+      reload();
+    } catch (err) {
+      setVisibleTodos((current) => current.map((item) => item.id === todo.id ? { ...item, done: todo.done } : item));
+      notify((err as Error).message, true);
+    } finally {
+      setPending((current) => {
+        const next = new Set(current);
+        next.delete(todo.id);
+        return next;
+      });
+    }
+  };
+
+  return (
+    <>
+      <SectionTitle aside={`${visibleTodos.filter((todo) => !todo.done).length} open`}>To do</SectionTitle>
       <div className="stack">
-        {todos.map((todo) => (
+        {visibleTodos.map((todo) => (
           <div className="line" key={todo.id}>
             <button
               className="check"
               role="checkbox"
               aria-checked={todo.done}
+              aria-busy={pending.has(todo.id)}
               aria-label={todo.done ? `Reopen ${todo.title}` : `Complete ${todo.title}`}
               onClick={() => void toggle(todo)}
             >
@@ -361,7 +467,7 @@ function TodoList({ todos, notify, reload }: { todos: Todo[]; notify: (t: string
             {todo.dueDate && <span className={dueClass(todo.dueDate, todo.done)}>{relativeDay(todo.dueDate)}</span>}
           </div>
         ))}
-        {!todos.length && <div className="column-empty">Nothing to do here.</div>}
+        {!visibleTodos.length && <div className="column-empty">Nothing to do here.</div>}
       </div>
     </>
   );

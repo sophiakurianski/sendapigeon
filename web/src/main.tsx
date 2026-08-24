@@ -14,7 +14,7 @@ import { DetailDrawer, type Selection } from './views/DetailDrawer';
 type Route = 'board' | 'people' | 'companies' | 'todos' | 'notes' | 'activity';
 
 const ROUTES: { id: Route; label: string; title: string; sub: (s: Stats | null) => string }[] = [
-  { id: 'board', label: 'Board', title: 'Pipeline', sub: (s) => (s ? `${s.deals.open} open · ${s.currency} ${s.deals.openValue.toLocaleString('en-AU')}` : '') },
+  { id: 'board', label: 'Board', title: 'Board', sub: (s) => (s ? `${s.people} people · ${s.deals.open} open deals` : '') },
   { id: 'todos', label: 'To do', title: 'To do', sub: (s) => (s ? `${s.todos.open} open · ${s.todos.overdue} overdue` : '') },
   { id: 'people', label: 'People', title: 'People', sub: (s) => (s ? `${s.people} contacts` : '') },
   { id: 'companies', label: 'Companies', title: 'Companies', sub: (s) => (s ? `${s.companies} companies` : '') },

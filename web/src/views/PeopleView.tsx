@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, type Company, type Person } from '../api';
 import { Empty } from '../components/Drawer';
 import { Monogram, PigeonWaiting } from '../components/Pigeon';
+import { relativeDay } from '../lib';
 import type { ViewProps } from './types';
 
-type Mode = 'studio' | 'az';
-type Sort = 'name' | 'company' | 'location' | 'title' | 'updated';
-type Attribute = 'title' | 'company' | 'location' | 'email' | 'phone' | 'linkedin' | 'owner';
+type Mode = 'studio' | 'az' | 'recent';
+type Sort = 'name' | 'company' | 'location' | 'title' | 'created' | 'updated';
+type Attribute = 'title' | 'company' | 'location' | 'email' | 'phone' | 'linkedin' | 'owner' | 'created';
 
 const ATTRIBUTES: { id: Attribute; label: string }[] = [
   { id: 'title', label: 'Role' },
@@ -16,6 +17,7 @@ const ATTRIBUTES: { id: Attribute; label: string }[] = [
   { id: 'phone', label: 'Phone' },
   { id: 'linkedin', label: 'LinkedIn' },
   { id: 'owner', label: 'Owner' },
+  { id: 'created', label: 'Added' },
 ];
 
 const valueFor = (person: Person, field: Attribute, companies: Record<string, Company>): string => {
@@ -23,6 +25,7 @@ const valueFor = (person: Person, field: Attribute, companies: Record<string, Co
   if (field === 'company') return company?.name ?? '';
   if (field === 'location') return person.location ?? company?.location ?? '';
   if (field === 'linkedin') return person.linkedin ? 'Profile saved' : '';
+  if (field === 'created') return relativeDay(person.createdAt.slice(0, 10));
   return person[field] ?? '';
 };
 
@@ -67,6 +70,7 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
     });
 
     return [...list].sort((a, b) => {
+      if (sort === 'created') return b.createdAt.localeCompare(a.createdAt);
       if (sort === 'updated') return b.updatedAt.localeCompare(a.updatedAt);
       const field: Attribute = sort === 'name' ? 'title' : sort;
       const av = sort === 'name' ? a.name : valueFor(a, field, companies);
@@ -107,6 +111,12 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
         <div className="segmented" role="group" aria-label="Group contacts">
           <button aria-pressed={mode === 'studio'} onClick={() => setMode('studio')}>By company</button>
           <button aria-pressed={mode === 'az'} onClick={() => setMode('az')}>All people</button>
+          <button
+            aria-pressed={mode === 'recent'}
+            onClick={() => { setMode('recent'); setSort('created'); }}
+          >
+            Recently added
+          </button>
         </div>
 
         <input className="control-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter people\u2026" aria-label="Filter people" />
@@ -122,7 +132,7 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
           onChange={(event) => {
             const next = event.target.value as Sort;
             setSort(next);
-            setMode(next === 'company' ? 'studio' : 'az');
+            setMode(next === 'company' ? 'studio' : next === 'created' ? 'recent' : 'az');
           }}
           aria-label="Sort people"
         >
@@ -130,6 +140,7 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
           <option value="company">Sort: company</option>
           <option value="location">Sort: location</option>
           <option value="title">Sort: role</option>
+          <option value="created">Sort: recently added</option>
           <option value="updated">Sort: recently updated</option>
         </select>
 
@@ -171,13 +182,17 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
         <Empty icon={<PigeonWaiting size={50} />} title="No people match">
           Clear the name or location filter to see everyone again.
         </Empty>
-      ) : mode === 'az' ? (
+      ) : mode === 'az' || mode === 'recent' ? (
         <div className="rows people-rows">
           {filtered.map((person) => (
             <button className="row person-row" key={person.id} onClick={() => onSelect({ kind: 'person', id: person.id })}>
               <Monogram name={person.name} id={person.id} size="sm" />
               <span className="person-main"><span className="person-name">{person.name}</span></span>
-              <PersonAttributes person={person} shown={shown} companies={companies} />
+              <PersonAttributes
+                person={person}
+                shown={mode === 'recent' && !shown.includes('created') ? [...shown, 'created'] : shown}
+                companies={companies}
+              />
             </button>
           ))}
         </div>

@@ -66,10 +66,14 @@ export function isVault(vault: string): boolean {
 
 export function loadConfig(vault: string): VaultConfig {
   const cfg = readJson<Partial<VaultConfig>>(vaultPaths(vault).config, {});
+  const stages = cfg.stages?.length ? cfg.stages : DEFAULT_CONFIG.stages;
   return {
     ...DEFAULT_CONFIG,
     ...cfg,
-    stages: cfg.stages?.length ? cfg.stages : DEFAULT_CONFIG.stages,
+    stages,
+    peopleBoards: cfg.peopleBoards?.length
+      ? cfg.peopleBoards
+      : [{ id: 'people', name: 'People workflow', stages }],
   };
 }
 

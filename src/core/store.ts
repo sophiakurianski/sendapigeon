@@ -9,7 +9,9 @@ import {
   type Company,
   type Deal,
   type Note,
+  type PeopleBoardTemplate,
   type Person,
+  type Stage,
   type Todo,
   type VaultConfig,
 } from './types.js';
@@ -103,6 +105,107 @@ export class Vault {
     saveConfig(this.root, next);
     this.configCache = next;
     return next;
+  }
+
+  get peopleBoards(): PeopleBoardTemplate[] {
+    return this.config.peopleBoards;
+  }
+
+  peopleBoardTemplate(id?: string): PeopleBoardTemplate | undefined {
+    if (!id) return this.peopleBoards[0];
+    const needle = String(id).trim().toLowerCase();
+    return this.peopleBoards.find((board) => board.id.toLowerCase() === needle)
+      ?? this.peopleBoards.find((board) => board.name.toLowerCase() === needle)
+      ?? this.peopleBoards.find((board) => slugify(board.name) === slugify(needle));
+  }
+
+  requirePeopleBoard(id?: string): PeopleBoardTemplate {
+    const board = this.peopleBoardTemplate(id);
+    if (!board) throw new VaultError(`No people board matching "${id}".`, 'NOT_FOUND');
+    return board;
+  }
+
+  private normalisePeopleStages(stages: Partial<Stage>[], current: Stage[] = []): Stage[] {
+    if (!Array.isArray(stages) || !stages.length) throw new VaultError('A board needs at least one column.', 'BAD_INPUT');
+    const ids: string[] = [];
+    return stages.map((stage, index) => {
+      const name = String(stage.name ?? '').trim();
+      if (!name) throw new VaultError(`Column ${index + 1} needs a name.`, 'BAD_INPUT');
+      const preserved = stage.id && current.some((item) => item.id === stage.id) ? stage.id : undefined;
+      const id = uniqueId(slugify(preserved || name), ids);
+      ids.push(id);
+      return compact({ id, name, probability: stage.probability }) as Stage;
+    });
+  }
+
+  createPeopleBoard(input: { name: string; stages: Partial<Stage>[] }): PeopleBoardTemplate {
+    const name = String(input.name ?? '').trim();
+    if (!name) throw new VaultError('A board needs a name.', 'BAD_INPUT');
+    const board: PeopleBoardTemplate = {
+      id: uniqueId(slugify(name), this.peopleBoards.map((item) => item.id)),
+      name,
+      stages: this.normalisePeopleStages(input.stages),
+    };
+    this.setConfig({ peopleBoards: [...this.peopleBoards, board] });
+    return board;
+  }
+
+  updatePeopleBoard(id: string, patch: { name?: string; stages?: Partial<Stage>[] }): PeopleBoardTemplate {
+    const current = this.requirePeopleBoard(id);
+    const name = patch.name === undefined ? current.name : String(patch.name).trim();
+    if (!name) throw new VaultError('A board needs a name.', 'BAD_INPUT');
+    const stages = patch.stages === undefined ? current.stages : this.normalisePeopleStages(patch.stages, current.stages);
+    const stageIds = new Set(stages.map((stage) => stage.id));
+    const removed = new Set(current.stages.filter((stage) => !stageIds.has(stage.id)).map((stage) => stage.id));
+    const occupants = this.people().filter((person) => this.personBoardId(person) === current.id && removed.has(String(person.stage)));
+    if (occupants.length) {
+      throw new VaultError(
+        `Move ${occupants.length} ${occupants.length === 1 ? 'person' : 'people'} out of the column before removing it.`,
+        'BAD_INPUT',
+      );
+    }
+    const next = { ...current, name, stages };
+    this.setConfig({ peopleBoards: this.peopleBoards.map((board) => board.id === current.id ? next : board) });
+
+    const renamed = new Map(stages.map((stage) => [stage.id, stage.name]));
+    const defaultId = this.peopleBoards[0]?.id;
+    const ts = nowIso();
+    this.persist('todos', this.todos().map((todo) => {
+      const belongs = todo.boardId === current.id || (!todo.boardId && current.id === defaultId);
+      const title = todo.stageId && renamed.get(todo.stageId);
+      return belongs && title && todo.title !== title ? { ...todo, title, updatedAt: ts } : todo;
+    }));
+    return next;
+  }
+
+  deletePeopleBoard(id: string): PeopleBoardTemplate {
+    const current = this.requirePeopleBoard(id);
+    if (this.peopleBoards.length === 1) throw new VaultError('The workspace needs at least one people board.', 'BAD_INPUT');
+    const occupants = this.people().filter((person) => this.personBoardId(person) === current.id);
+    if (occupants.length) {
+      throw new VaultError(
+        `Move ${occupants.length} ${occupants.length === 1 ? 'person' : 'people'} to another board before deleting it.`,
+        'BAD_INPUT',
+      );
+    }
+    this.setConfig({ peopleBoards: this.peopleBoards.filter((board) => board.id !== current.id) });
+    return current;
+  }
+
+  personBoardId(person: Person): string {
+    return this.peopleBoardTemplate(person.boardId)?.id ?? this.requirePeopleBoard().id;
+  }
+
+  /** Accepts a column id or name within a named people board. */
+  resolvePeopleStage(boardInput?: string, stageInput?: string): string {
+    const board = this.requirePeopleBoard(boardInput);
+    if (!stageInput) return board.stages[0].id;
+    const needle = String(stageInput).trim().toLowerCase();
+    const stage = board.stages.find((item) => item.id.toLowerCase() === needle)
+      ?? board.stages.find((item) => item.name.toLowerCase() === needle)
+      ?? board.stages.find((item) => slugify(item.name) === slugify(needle));
+    if (!stage) throw new VaultError(`Unknown column "${stageInput}" on ${board.name}.`, 'BAD_STAGE');
+    return stage.id;
   }
 
   stage(id: string) {
@@ -291,11 +394,15 @@ export class Vault {
       rest.companyId ?? this.resolveCompanyId(company, { create: opts.createCompany ?? true, actor: opts.actor });
     const list = this.people();
     const ts = nowIso();
+    const board = this.requirePeopleBoard(rest.boardId);
+    const stage = this.resolvePeopleStage(board.id, rest.stage);
     const record: Person = compact({
       ...rest,
       id: uniqueId(slugify(input.id || input.name), list.map((p) => p.id)),
       name: input.name.trim(),
       companyId,
+      boardId: board.id,
+      stage,
       tags: normaliseTags(input.tags),
       createdAt: ts,
       updatedAt: ts,
@@ -303,6 +410,7 @@ export class Vault {
     appendJsonl(this.paths.people, record);
     list.push(record);
     this.log({ action: 'created', kind: 'person', id: record.id, actor: opts.actor ?? this.defaultActor, summary: record.name });
+    this.ensurePersonStageTodo(record.id, stage, opts);
     return record;
   }
 
@@ -342,6 +450,86 @@ export class Vault {
     );
     this.log({ action: 'deleted', kind: 'person', id: current.id, actor: opts.actor ?? this.defaultActor, summary: current.name });
     return current;
+  }
+
+  /** Ensures the person's current workflow stage is represented in To do. */
+  ensurePersonStageTodo(idOrName: string, stageInput?: string, opts: MutationOptions = {}): Todo {
+    const person = this.requirePerson(idOrName);
+    const board = this.requirePeopleBoard(this.personBoardId(person));
+    const stageId = this.resolvePeopleStage(board.id, stageInput ?? person.stage);
+    const defaultId = this.peopleBoards[0]?.id;
+    const existing = this.todos().find((todo) => todo.personId === person.id
+      && todo.stageId === stageId
+      && (todo.boardId === board.id || (!todo.boardId && board.id === defaultId)));
+    if (existing) return existing;
+    const stage = board.stages.find((item) => item.id === stageId);
+    return this.createTodo({
+      title: stage?.name ?? stageId,
+      personId: person.id,
+      companyId: person.companyId,
+      stageId,
+      boardId: board.id,
+      tags: ['stage'],
+    }, opts);
+  }
+
+  /** Moves a person on the board and keeps the stage todo in sync. */
+  movePersonStage(idOrName: string, stageInput: string, opts: MutationOptions = {}): { person: Person; todo: Todo } {
+    const current = this.requirePerson(idOrName);
+    const board = this.requirePeopleBoard(this.personBoardId(current));
+    const fromId = this.resolvePeopleStage(board.id, current.stage);
+    const targetId = this.resolvePeopleStage(board.id, stageInput);
+    const stages = board.stages;
+    const fromIndex = stages.findIndex((stage) => stage.id === fromId);
+    const targetIndex = stages.findIndex((stage) => stage.id === targetId);
+
+    if (fromId !== targetId && targetIndex > fromIndex) {
+      const previous = this.ensurePersonStageTodo(current.id, fromId, opts);
+      if (!previous.done) this.completeTodo(previous.id, true, opts);
+    }
+
+    const person = fromId === targetId
+      ? current
+      : this.updatePerson(current.id, { stage: targetId, stageCompletedAt: undefined }, opts);
+    let todo = this.ensurePersonStageTodo(person.id, targetId, opts);
+    if (fromId !== targetId && todo.done) todo = this.completeTodo(todo.id, false, opts);
+    return { person, todo };
+  }
+
+  /** Checks off the current stage, advances the person, and opens the next todo. */
+  advancePersonStage(idOrName: string, opts: MutationOptions = {}): { person: Person; completed: Todo; next: Todo | null } {
+    const current = this.requirePerson(idOrName);
+    const board = this.requirePeopleBoard(this.personBoardId(current));
+    const stageId = this.resolvePeopleStage(board.id, current.stage);
+    const stages = board.stages;
+    const index = stages.findIndex((stage) => stage.id === stageId);
+    let completed = this.ensurePersonStageTodo(current.id, stageId, opts);
+    if (!completed.done) completed = this.completeTodo(completed.id, true, opts);
+
+    const nextStage = stages[index + 1];
+    if (!nextStage) {
+      const person = current.stageCompletedAt
+        ? current
+        : this.updatePerson(current.id, { stageCompletedAt: nowIso() }, opts);
+      return { person, completed, next: null };
+    }
+
+    const person = this.updatePerson(current.id, { stage: nextStage.id, stageCompletedAt: undefined }, opts);
+    const next = this.ensurePersonStageTodo(person.id, nextStage.id, opts);
+    return { person, completed, next };
+  }
+
+  /** Reassigns a contact to another workflow and starts its first column. */
+  movePersonBoard(idOrName: string, boardInput: string, opts: MutationOptions = {}): { person: Person; todo: Todo } {
+    const current = this.requirePerson(idOrName);
+    const board = this.requirePeopleBoard(boardInput);
+    const stage = board.stages[0].id;
+    const person = this.personBoardId(current) === board.id && current.stage === stage
+      ? current
+      : this.updatePerson(current.id, { boardId: board.id, stage, stageCompletedAt: undefined }, opts);
+    let todo = this.ensurePersonStageTodo(person.id, stage, opts);
+    if (todo.done) todo = this.completeTodo(todo.id, false, opts);
+    return { person, todo };
   }
 
   // ------------------------------------------------------------------ deals

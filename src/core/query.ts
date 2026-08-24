@@ -177,6 +177,49 @@ export interface ExpandedDeal extends Deal {
   nextTodo?: Pick<Todo, 'id' | 'title' | 'dueDate'> | null;
 }
 
+export interface PersonBoardCard extends Person {
+  company?: Pick<Company, 'id' | 'name'> | null;
+  stageTodo?: Pick<Todo, 'id' | 'title' | 'done' | 'dueDate'> | null;
+}
+
+export interface PersonBoardColumn {
+  id: string;
+  name: string;
+  people: PersonBoardCard[];
+  count: number;
+}
+
+export interface PersonBoard { id: string; name: string; columns: PersonBoardColumn[]; total: number }
+
+/** One named contact workflow and the people assigned to it. */
+export function personBoard(vault: Vault, boardId?: string): PersonBoard {
+  const template = vault.requirePeopleBoard(boardId);
+  const people = vault.people().filter((person) => !person.archived && vault.personBoardId(person) === template.id);
+  const todos = vault.todos();
+  const firstStage = template.stages[0]?.id;
+  const defaultId = vault.peopleBoards[0]?.id;
+  const columns = template.stages.map((stage) => {
+    const members = people
+      .filter((person) => (person.stage ?? firstStage) === stage.id)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((person): PersonBoardCard => {
+        const company = person.companyId ? vault.company(person.companyId) : undefined;
+        const stageTodo = todos.find((todo) => todo.personId === person.id
+          && todo.stageId === stage.id
+          && (todo.boardId === template.id || (!todo.boardId && template.id === defaultId)));
+        return {
+          ...person,
+          company: company ? { id: company.id, name: company.name } : null,
+          stageTodo: stageTodo
+            ? { id: stageTodo.id, title: stageTodo.title, done: stageTodo.done, dueDate: stageTodo.dueDate }
+            : null,
+        };
+      });
+    return { id: stage.id, name: stage.name, people: members, count: members.length };
+  });
+  return { id: template.id, name: template.name, columns, total: people.length };
+}
+
 export function expandDeal(vault: Vault, deal: Deal): ExpandedDeal {
   const company = deal.companyId ? vault.company(deal.companyId) : undefined;
   const contacts = (deal.personIds ?? [])

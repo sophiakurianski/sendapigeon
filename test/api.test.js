@@ -82,6 +82,46 @@ describe('rest api', () => {
     assert.equal(after.body.filter((company) => company.id === 'acme-corp').length, acmeBefore);
   });
 
+  test('people board stages are linked to todos and advance together', async () => {
+    const board = await get('/api/people-board');
+    const jane = board.body.columns.flatMap((column) => column.people).find((person) => person.id === 'jane-doe');
+    assert.equal(jane.stage, 'lead');
+    assert.equal(jane.stageTodo.title, 'Lead In');
+    assert.equal(jane.stageTodo.done, false);
+
+    const advanced = await send('POST', '/api/people/jane-doe/stage/advance');
+    assert.equal(advanced.body.completed.done, true);
+    assert.equal(advanced.body.person.stage, 'contacted');
+    assert.equal(advanced.body.next.stageId, 'contacted');
+
+    const todos = await get('/api/todos?person=jane-doe&done=false');
+    assert.equal(todos.body.some((todo) => todo.stageId === 'contacted'), true);
+  });
+
+  test('people boards can be created, edited and selected through the api', async () => {
+    const created = await send('POST', '/api/people-boards', {
+      name: 'Community launch',
+      stages: [{ name: 'Invite' }, { name: 'Onboard' }],
+    });
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.body.stages.map((stage) => stage.id), ['invite', 'onboard']);
+
+    const assigned = await send('POST', '/api/people/alex-smith/board', { boardId: created.body.id });
+    assert.equal(assigned.body.person.boardId, created.body.id);
+    assert.equal(assigned.body.todo.title, 'Invite');
+
+    const selected = await get(`/api/people-board?board=${created.body.id}`);
+    assert.equal(selected.body.name, 'Community launch');
+    assert.equal(selected.body.total, 1);
+
+    const edited = await send('PATCH', `/api/people-boards/${created.body.id}`, {
+      name: 'Community partners',
+      stages: [...created.body.stages, { name: 'Activate' }],
+    });
+    assert.equal(edited.body.name, 'Community partners');
+    assert.deepEqual(edited.body.stages.map((stage) => stage.id), ['invite', 'onboard', 'activate']);
+  });
+
   test('a deal moves stage and reports it back', async () => {
     const { body } = await send('POST', '/api/deals/acme-renewal/move', { stage: 'negotiation' });
     assert.equal(body.stage, 'negotiation');

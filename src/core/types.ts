@@ -40,6 +40,12 @@ export interface Person extends BaseRecord {
   email?: string;
   phone?: string;
   linkedin?: string;
+  /** Current position in the contact workflow. Uses a configured stage id. */
+  stage?: string;
+  /** Named people workflow this contact belongs to. */
+  boardId?: string;
+  /** Set when the final workflow stage is checked off. */
+  stageCompletedAt?: string;
   location?: string;
   owner?: string;
   description?: string;
@@ -79,6 +85,10 @@ export interface Todo extends BaseRecord {
   companyId?: string;
   personId?: string;
   dealId?: string;
+  /** A configured workflow stage when this todo drives board progress. */
+  stageId?: string;
+  /** People workflow owning stageId. Absent on legacy default-board todos. */
+  boardId?: string;
   owner?: string;
   notes?: string;
   completedAt?: string;
@@ -112,12 +122,20 @@ export interface Stage {
   probability?: number;
 }
 
+export interface PeopleBoardTemplate {
+  id: string;
+  name: string;
+  stages: Stage[];
+}
+
 export interface VaultConfig {
   version: number;
   name: string;
   currency: string;
   /** Kanban columns, in board order. */
   stages: Stage[];
+  /** Named contact workflows. The first is the default for new people. */
+  peopleBoards: PeopleBoardTemplate[];
   /** Optional default owner stamped onto new records. */
   owner?: string;
 }
@@ -147,4 +165,5 @@ export const DEFAULT_CONFIG: VaultConfig = {
   name: 'SendAPigeon',
   currency: 'AUD',
   stages: DEFAULT_STAGES,
+  peopleBoards: [{ id: 'people', name: 'People workflow', stages: DEFAULT_STAGES }],
 };
