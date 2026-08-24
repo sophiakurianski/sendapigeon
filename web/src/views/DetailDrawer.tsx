@@ -9,7 +9,7 @@ import {
 } from '../api';
 import { Drawer, Facts, SectionTitle } from '../components/Drawer';
 import { Monogram, Postmark, daysSince } from '../components/Pigeon';
-import { dueClass, markdown, money, relativeDay } from '../lib';
+import { dueClass, markdown, money, relativeDay, today } from '../lib';
 
 export interface Selection {
   kind: 'deal' | 'person' | 'company' | 'note' | 'todo';
@@ -63,10 +63,10 @@ export function DetailDrawer({ selection, onClose, onSelect, notify, refresh }: 
     return <DealPanel deal={record as DealDetail} onClose={onClose} onSelect={onSelect} notify={notify} reload={reload} />;
   }
   if (selection.kind === 'person') {
-    return <PersonPanel person={record as PersonDetail} onClose={onClose} onSelect={onSelect} />;
+    return <PersonPanel person={record as PersonDetail} onClose={onClose} onSelect={onSelect} notify={notify} reload={reload} />;
   }
   if (selection.kind === 'company') {
-    return <CompanyPanel company={record as CompanyDetail} onClose={onClose} onSelect={onSelect} />;
+    return <CompanyPanel company={record as CompanyDetail} onClose={onClose} onSelect={onSelect} notify={notify} reload={reload} />;
   }
   return <NotePanel note={record as Note} onClose={onClose} onSelect={onSelect} />;
 }
@@ -180,10 +180,14 @@ function PersonPanel({
   person,
   onClose,
   onSelect,
+  notify,
+  reload,
 }: {
   person: PersonDetail;
   onClose: () => void;
   onSelect: (s: Selection) => void;
+  notify: (text: string, error?: boolean) => void;
+  reload: () => void;
 }) {
   return (
     <Drawer
@@ -206,6 +210,8 @@ function PersonPanel({
       />
       {person.description && <p>{person.description}</p>}
 
+      <ContactTodoComposer person={person} notify={notify} reload={reload} />
+
       <SectionTitle aside={String(person.deals.length)}>Deals</SectionTitle>
       <div className="stack">
         {person.deals.map((d) => (
@@ -218,8 +224,12 @@ function PersonPanel({
         {!person.deals.length && <div className="column-empty">Not on any deal.</div>}
       </div>
 
-      <SimpleTodos todos={person.todos} />
-      <NoteList notes={person.notes} onSelect={onSelect} />
+      <TodoList todos={person.todos} notify={notify} reload={reload} />
+      <NoteList
+        notes={person.notes}
+        onSelect={onSelect}
+        composer={<NoteComposer association={{ attendees: [person.id], companyId: person.company?.id }} subject={person.name} notify={notify} reload={reload} />}
+      />
     </Drawer>
   );
 }
@@ -230,10 +240,14 @@ function CompanyPanel({
   company,
   onClose,
   onSelect,
+  notify,
+  reload,
 }: {
   company: CompanyDetail;
   onClose: () => void;
   onSelect: (s: Selection) => void;
+  notify: (text: string, error?: boolean) => void;
+  reload: () => void;
 }) {
   return (
     <Drawer
@@ -279,8 +293,12 @@ function CompanyPanel({
         {!company.deals.length && <div className="column-empty">No deals with this company.</div>}
       </div>
 
-      <SimpleTodos todos={company.todos} />
-      <NoteList notes={company.notes} onSelect={onSelect} />
+      <TodoList todos={company.todos} notify={notify} reload={reload} />
+      <NoteList
+        notes={company.notes}
+        onSelect={onSelect}
+        composer={<NoteComposer association={{ companyId: company.id }} subject={company.name} notify={notify} reload={reload} />}
+      />
     </Drawer>
   );
 }
@@ -349,27 +367,11 @@ function TodoList({ todos, notify, reload }: { todos: Todo[]; notify: (t: string
   );
 }
 
-function SimpleTodos({ todos }: { todos: Todo[] }) {
-  if (!todos.length) return null;
-  return (
-    <>
-      <SectionTitle aside={String(todos.length)}>Open to do</SectionTitle>
-      <div className="stack">
-        {todos.map((todo) => (
-          <div className="line" key={todo.id}>
-            <span className="grow">{todo.title}</span>
-            {todo.dueDate && <span className={dueClass(todo.dueDate, todo.done)}>{relativeDay(todo.dueDate)}</span>}
-          </div>
-        ))}
-      </div>
-    </>
-  );
-}
-
-function NoteList({ notes, onSelect }: { notes: Note[]; onSelect: (s: Selection) => void }) {
+function NoteList({ notes, onSelect, composer }: { notes: Note[]; onSelect: (s: Selection) => void; composer?: React.ReactNode }) {
   return (
     <>
       <SectionTitle aside={String(notes.length)}>Notes</SectionTitle>
+      {composer}
       <div className="stack">
         {notes.map((note) => (
           <button className="line" key={note.id} onClick={() => onSelect({ kind: 'note', id: note.id })}>
@@ -380,5 +382,122 @@ function NoteList({ notes, onSelect }: { notes: Note[]; onSelect: (s: Selection)
         {!notes.length && <div className="column-empty">No notes written yet.</div>}
       </div>
     </>
+  );
+}
+
+function ContactTodoComposer({ person, notify, reload }: { person: PersonDetail; notify: (text: string, error?: boolean) => void; reload: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [dueDate, setDueDate] = useState(today());
+  const [busy, setBusy] = useState(false);
+
+  const create = async (todoTitle: string, date?: string) => {
+    if (!todoTitle.trim() || busy) return;
+    setBusy(true);
+    try {
+      await api.createTodo({ title: todoTitle.trim(), personId: person.id, companyId: person.company?.id, dueDate: date });
+      notify('Follow-up added');
+      setTitle('');
+      setOpen(false);
+      reload();
+    } catch (err) {
+      notify((err as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <SectionTitle>Quick follow-up</SectionTitle>
+      <div className="quick-actions">
+        <button className="quick-action" disabled={busy} onClick={() => void create(`Call ${person.name}`, today())}>
+          <span aria-hidden="true">☎</span> Call today
+        </button>
+        <button className="quick-action" disabled={busy} onClick={() => void create(`Add ${person.name} on LinkedIn`)}>
+          <span aria-hidden="true">in</span> Add on LinkedIn
+        </button>
+        <button className="quick-action" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+          <span aria-hidden="true">＋</span> Custom
+        </button>
+      </div>
+      {open && (
+        <form className="composer compact" onSubmit={(event) => { event.preventDefault(); void create(title, dueDate || undefined); }}>
+          <label className="composer-wide">
+            <span>What needs doing?</span>
+            <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={`Follow up with ${person.name}`} autoFocus required />
+          </label>
+          <label>
+            <span>Due</span>
+            <input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
+          </label>
+          <div className="composer-actions">
+            <button type="button" className="btn ghost" onClick={() => setOpen(false)}>Cancel</button>
+            <button className="btn" disabled={busy}>{busy ? 'Adding\u2026' : 'Add follow-up'}</button>
+          </div>
+        </form>
+      )}
+    </>
+  );
+}
+
+function NoteComposer({
+  association,
+  subject,
+  notify,
+  reload,
+}: {
+  association: { companyId?: string; attendees?: string[] };
+  subject: string;
+  notify: (text: string, error?: boolean) => void;
+  reload: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!title.trim() || busy) return;
+    setBusy(true);
+    try {
+      await api.createNote({
+        title: title.trim(),
+        body: body.trim(),
+        type: association.attendees?.length ? 'contact' : 'company',
+        ...association,
+      });
+      notify('Note added');
+      setTitle('');
+      setBody('');
+      setOpen(false);
+      reload();
+    } catch (err) {
+      notify((err as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return <button className="add-note" onClick={() => setOpen(true)}>＋ Add a note about {subject}</button>;
+  }
+
+  return (
+    <form className="composer note-composer" onSubmit={(event) => void submit(event)}>
+      <label>
+        <span>Note title</span>
+        <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={`Conversation with ${subject}`} autoFocus required />
+      </label>
+      <label>
+        <span>Details</span>
+        <textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="What happened, and what should happen next?" rows={5} />
+      </label>
+      <div className="composer-actions">
+        <button type="button" className="btn ghost" onClick={() => setOpen(false)}>Cancel</button>
+        <button className="btn" disabled={busy}>{busy ? 'Saving\u2026' : 'Save note'}</button>
+      </div>
+    </form>
   );
 }

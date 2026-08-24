@@ -6,7 +6,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'content-type': 'application/json', 'x-pigeon-actor': 'web', ...(init?.headers ?? {}) },
   });
   const text = await res.text();
-  const body = text ? JSON.parse(text) : null;
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // A non-JSON body means we did not reach the API route -- usually a server
+    // running older code than the page, which 404s as an HTML error document.
+    throw new Error(
+      res.ok || res.status === 404
+        ? `The server has no ${path} endpoint. Restart it so it picks up the current build.`
+        : `Request failed (${res.status}).`,
+    );
+  }
   if (!res.ok) throw new Error(body?.error ?? `Request failed (${res.status})`);
   return body as T;
 }
@@ -32,6 +43,10 @@ export const api = {
 
   people: (params?: Record<string, unknown>) => request<Person[]>(`/people${qs(params)}`),
   person: (id: string) => request<PersonDetail>(`/people/${encodeURIComponent(id)}`),
+  createPerson: (input: { name: string; company?: string; companyId?: string; linkedin?: string }) =>
+    request<Person>('/people', { method: 'POST', body: JSON.stringify(input) }),
+  updatePerson: (id: string, patch: Partial<Person> & { company?: string }) =>
+    request<Person>(`/people/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 
   deals: (params?: Record<string, unknown>) => request<Deal[]>(`/deals${qs(params)}`),
   deal: (id: string) => request<DealDetail>(`/deals/${encodeURIComponent(id)}`),
@@ -42,11 +57,15 @@ export const api = {
     request<Deal>(`/deals/${encodeURIComponent(id)}/lose`, { method: 'POST', body: JSON.stringify({ reason }) }),
 
   todos: (params?: Record<string, unknown>) => request<Todo[]>(`/todos${qs(params)}`),
+  createTodo: (input: { title: string; dueDate?: string; priority?: Todo['priority']; personId?: string; companyId?: string; dealId?: string }) =>
+    request<Todo>('/todos', { method: 'POST', body: JSON.stringify(input) }),
   toggleTodo: (id: string, done: boolean) =>
     request<Todo>(`/todos/${encodeURIComponent(id)}/toggle`, { method: 'POST', body: JSON.stringify({ done }) }),
 
   notes: (params?: Record<string, unknown>) => request<Note[]>(`/notes${qs(params)}`),
   note: (id: string) => request<Note>(`/notes/${encodeURIComponent(id)}`),
+  createNote: (input: { title: string; body?: string; type?: string; companyId?: string; dealId?: string; attendees?: string[] }) =>
+    request<Note>('/notes', { method: 'POST', body: JSON.stringify(input) }),
 };
 
 // ------------------------------------------------------------------- types

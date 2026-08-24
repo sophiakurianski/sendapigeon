@@ -65,6 +65,23 @@ describe('rest api', () => {
     assert.equal(body.companyId, 'northwind-freight');
   });
 
+  test('manual person creation reuses an existing company by name', async () => {
+    const before = await get('/api/companies');
+    const acmeBefore = before.body.filter((company) => company.id === 'acme-corp').length;
+
+    const { status, body } = await send('POST', '/api/people', {
+      name: 'Alex Smith',
+      company: 'Acme Corp',
+      linkedin: 'https://www.linkedin.com/in/alex-smith',
+    });
+    const after = await get('/api/companies');
+
+    assert.equal(status, 201);
+    assert.equal(body.companyId, 'acme-corp');
+    assert.equal(body.linkedin, 'https://www.linkedin.com/in/alex-smith');
+    assert.equal(after.body.filter((company) => company.id === 'acme-corp').length, acmeBefore);
+  });
+
   test('a deal moves stage and reports it back', async () => {
     const { body } = await send('POST', '/api/deals/acme-renewal/move', { stage: 'negotiation' });
     assert.equal(body.stage, 'negotiation');
@@ -109,4 +126,33 @@ describe('rest api', () => {
     assert.ok(kinds.has('company'));
     assert.ok(kinds.has('deal'));
   });
+
+  test('web follow-ups stay attached to their person', async () => {
+    const created = await send('POST', '/api/todos', {
+      title: 'Call Jane Doe',
+      personId: 'jane-doe',
+      companyId: 'acme-corp',
+      dueDate: '2026-08-25',
+    });
+    assert.equal(created.status, 201);
+
+    const { body } = await get('/api/people/jane-doe');
+    assert.equal(body.todos.some((todo) => todo.id === created.body.id), true);
+  });
+
+  test('notes can be attached to a person and their company', async () => {
+    const created = await send('POST', '/api/notes', {
+      title: 'Jane follow-up',
+      body: 'Discussed the next introduction.',
+      companyId: 'acme-corp',
+      attendees: ['jane-doe'],
+    });
+    assert.equal(created.status, 201);
+
+    const person = await get('/api/people/jane-doe');
+    const company = await get('/api/companies/acme-corp');
+    assert.equal(person.body.notes.some((note) => note.id === created.body.id), true);
+    assert.equal(company.body.notes.some((note) => note.id === created.body.id), true);
+  });
+
 });
