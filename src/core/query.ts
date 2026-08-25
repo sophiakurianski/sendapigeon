@@ -179,6 +179,7 @@ export interface ExpandedDeal extends Deal {
 
 export interface PersonBoardCard extends Person {
   company?: Pick<Company, 'id' | 'name'> | null;
+  /** Open task for the milestone after the card's current column. */
   stageTodo?: Pick<Todo, 'id' | 'title' | 'done' | 'dueDate'> | null;
 }
 
@@ -199,14 +200,18 @@ export function personBoard(vault: Vault, boardId?: string): PersonBoard {
   const firstStage = template.stages[0]?.id;
   const defaultId = vault.peopleBoards[0]?.id;
   const columns = template.stages.map((stage) => {
+    const stageIndex = template.stages.findIndex((item) => item.id === stage.id);
+    const nextStage = template.stages[stageIndex + 1];
     const members = people
       .filter((person) => (person.stage ?? firstStage) === stage.id)
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((person): PersonBoardCard => {
         const company = person.companyId ? vault.company(person.companyId) : undefined;
-        const stageTodo = todos.find((todo) => todo.personId === person.id
-          && todo.stageId === stage.id
-          && (todo.boardId === template.id || (!todo.boardId && template.id === defaultId)));
+        const stageTodo = nextStage
+          ? todos.find((todo) => todo.personId === person.id
+              && todo.stageId === nextStage.id
+              && (todo.boardId === template.id || (!todo.boardId && template.id === defaultId)))
+          : undefined;
         return {
           ...person,
           company: company ? { id: company.id, name: company.name } : null,

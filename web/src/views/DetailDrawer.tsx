@@ -24,9 +24,10 @@ interface Props {
   onSelect: (selection: Selection) => void;
   notify: (text: string, error?: boolean) => void;
   refresh: () => void;
+  version: number;
 }
 
-export function DetailDrawer({ selection, onClose, onSelect, notify, refresh }: Props) {
+export function DetailDrawer({ selection, onClose, onSelect, notify, refresh, version }: Props) {
   const selectionKey = `${selection.kind}:${selection.id}`;
   const [loaded, setLoaded] = useState<{ key: string; value: unknown } | null>(null);
   const [tick, setTick] = useState(0);
@@ -51,7 +52,7 @@ export function DetailDrawer({ selection, onClose, onSelect, notify, refresh }: 
       onClose();
     });
     return () => { cancelled = true; };
-  }, [selection.kind, selection.id, selectionKey, tick, notify, onClose]);
+  }, [selection.kind, selection.id, selectionKey, tick, version, notify, onClose]);
 
   const reload = () => {
     setTick((t) => t + 1);
@@ -496,13 +497,14 @@ function PersonStageProgress({ person, notify, reload }: {
   const currentId = person.stage ?? stages[0].id;
   const currentIndex = Math.max(0, stages.findIndex((stage) => stage.id === currentId));
 
-  const complete = async () => {
-    if (busy) return;
+  const moveToStage = async (stageId: string, stageName: string) => {
+    if (busy || stageId === currentId) return;
     setBusy(true);
     try {
-      const result = await api.advancePersonStage(person.id);
-      const current = stages[currentIndex].name;
-      notify(result.next ? `${current} completed · ${result.next.title} added to To do` : `${current} completed and noted`);
+      const result = await api.movePersonStage(person.id, stageId);
+      notify(result.todo
+        ? `${person.name} moved to ${stageName} · next: ${result.todo.title}`
+        : `${person.name} moved to ${stageName} · workflow complete`);
       reload();
     } catch (error) {
       notify((error as Error).message, true);
@@ -517,7 +519,9 @@ function PersonStageProgress({ person, notify, reload }: {
     try {
       const result = await api.movePersonBoard(person.id, boardId);
       const destination = boards.find((item) => item.id === boardId);
-      notify(`${person.name} moved to ${destination?.name ?? boardId} · ${result.todo.title} added to To do`);
+      notify(result.todo
+        ? `${person.name} moved to ${destination?.name ?? boardId} · next: ${result.todo.title}`
+        : `${person.name} moved to ${destination?.name ?? boardId}`);
       reload();
     } catch (error) {
       notify((error as Error).message, true);
@@ -537,19 +541,20 @@ function PersonStageProgress({ person, notify, reload }: {
       </label>
       <div className="stage-progress">
         {stages.map((stage, index) => {
-          const done = index < currentIndex || (index === currentIndex && Boolean(person.stageCompletedAt));
-          const active = index === currentIndex && !done;
+          const done = index <= currentIndex;
+          const active = index === currentIndex;
           return (
             <button
               key={stage.id}
-              className={done ? 'stage-step done' : active ? 'stage-step active' : 'stage-step'}
-              disabled={!active || busy}
-              onClick={() => void complete()}
-              aria-label={active ? `Complete ${stage.name}` : stage.name}
+              className={`${done ? 'stage-step done' : 'stage-step'}${active ? ' active' : ''}`}
+              disabled={active || busy}
+              onClick={() => void moveToStage(stage.id, stage.name)}
+              aria-current={active ? 'step' : undefined}
+              aria-label={active ? `${stage.name}, current stage` : `Move ${person.name} to ${stage.name}`}
             >
               <span className="stage-step-check" aria-hidden="true">{done ? '✓' : active ? '' : index + 1}</span>
               <span>{stage.name}</span>
-              {active && <small>{busy ? 'Noting…' : 'Tick to complete'}</small>}
+              <small>{active ? 'Current' : index === currentIndex + 1 ? 'To do' : busy ? 'Moving…' : 'Move here'}</small>
             </button>
           );
         })}

@@ -9,6 +9,7 @@ export const DEFAULT_VAULT = join(homedir(), 'SendAPigeon');
 
 interface Rc {
   vault?: string;
+  vaults?: string[];
 }
 
 /**
@@ -42,7 +43,31 @@ export function expandHome(p: string): string {
 }
 
 export function rememberVault(vault: string): void {
-  writeJson(RC_FILE, { vault });
+  const current = readJson<Rc>(RC_FILE, {});
+  const selected = resolve(expandHome(vault));
+  const vaults = Array.from(new Set([
+    selected,
+    ...(current.vaults ?? []).map((item) => resolve(expandHome(item))),
+    ...(current.vault ? [resolve(expandHome(current.vault))] : []),
+  ]));
+  writeJson(RC_FILE, { vault: selected, vaults });
+}
+
+export function rememberedVaults(): string[] {
+  const current = readJson<Rc>(RC_FILE, {});
+  return Array.from(new Set([
+    ...(current.vault ? [resolve(expandHome(current.vault))] : []),
+    ...(current.vaults ?? []).map((item) => resolve(expandHome(item))),
+  ]));
+}
+
+/** Removes a vault from the launcher only. Its folder and data are untouched. */
+export function forgetVault(vault: string): void {
+  const current = readJson<Rc>(RC_FILE, {});
+  const forgotten = resolve(expandHome(vault));
+  const vaults = rememberedVaults().filter((item) => item !== forgotten);
+  const selected = current.vault ? resolve(expandHome(current.vault)) : undefined;
+  writeJson(RC_FILE, { vault: selected === forgotten ? vaults[0] : selected, vaults });
 }
 
 export function vaultPaths(vault: string) {

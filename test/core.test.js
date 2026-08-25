@@ -83,15 +83,16 @@ describe('records', () => {
     assert.equal(person.companyId, 'acme-corp');
     assert.equal(vault.company('acme-corp').name, 'Acme Corp');
     assert.equal(person.stage, 'lead');
-    assert.equal(vault.todos().find((todo) => todo.personId === person.id && todo.stageId === 'lead').done, false);
+    assert.equal(vault.todos().some((todo) => todo.personId === person.id && todo.stageId === 'lead' && !todo.done), false);
+    assert.equal(vault.todos().find((todo) => todo.personId === person.id && todo.stageId === 'contacted').done, false);
   });
 
-  test('completing a person stage closes its todo and opens the next one', () => {
+  test('reaching the next person stage closes its todo and opens the stage after it', () => {
     const result = vault.advancePersonStage('jane-doe', { actor: 'web' });
-    assert.equal(result.completed.stageId, 'lead');
+    assert.equal(result.completed.stageId, 'contacted');
     assert.equal(result.completed.done, true);
     assert.equal(result.person.stage, 'contacted');
-    assert.equal(result.next.stageId, 'contacted');
+    assert.equal(result.next.stageId, 'demo');
     assert.equal(result.next.done, false);
     assert.equal(vault.activity(10).some((event) => event.action === 'completed' && event.id === result.completed.id), true);
   });
@@ -100,7 +101,7 @@ describe('records', () => {
     vault.advancePersonStage('jane-doe');
     const moved = vault.movePersonStage('jane-doe', 'contacted');
     assert.equal(moved.person.stage, 'contacted');
-    assert.equal(moved.todo.stageId, 'contacted');
+    assert.equal(moved.todo.stageId, 'demo');
     assert.equal(moved.todo.done, false);
   });
 
@@ -115,6 +116,7 @@ describe('records', () => {
     assert.equal(moved.person.boardId, custom.id);
     assert.equal(moved.person.stage, 'introduce');
     assert.equal(moved.todo.boardId, custom.id);
+    assert.equal(moved.todo.stageId, 'check-in');
     assert.equal(personBoard(vault, custom.id).total, 1);
 
     assert.throws(

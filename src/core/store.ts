@@ -452,29 +452,87 @@ export class Vault {
     return current;
   }
 
-  /** Ensures the person's current workflow stage is represented in To do. */
-  ensurePersonStageTodo(idOrName: string, stageInput?: string, opts: MutationOptions = {}): Todo {
-    const person = this.requirePerson(idOrName);
-    const board = this.requirePeopleBoard(this.personBoardId(person));
-    const stageId = this.resolvePeopleStage(board.id, stageInput ?? person.stage);
+  private workflowStageTodo(person: Person, board: PeopleBoardTemplate, stageId: string): Todo | undefined {
     const defaultId = this.peopleBoards[0]?.id;
-    const existing = this.todos().find((todo) => todo.personId === person.id
+    return this.todos().find((todo) => todo.personId === person.id
       && todo.stageId === stageId
       && (todo.boardId === board.id || (!todo.boardId && board.id === defaultId)));
+  }
+
+  private ensureWorkflowStageTodo(person: Person, board: PeopleBoardTemplate, stage: Stage, opts: MutationOptions): Todo {
+    const existing = this.workflowStageTodo(person, board, stage.id);
     if (existing) return existing;
-    const stage = board.stages.find((item) => item.id === stageId);
     return this.createTodo({
-      title: stage?.name ?? stageId,
+      title: stage.name,
       personId: person.id,
       companyId: person.companyId,
-      stageId,
+      stageId: stage.id,
       boardId: board.id,
       tags: ['stage'],
     }, opts);
   }
 
-  /** Moves a person on the board and keeps the stage todo in sync. */
-  movePersonStage(idOrName: string, stageInput: string, opts: MutationOptions = {}): { person: Person; todo: Todo } {
+  private setTodoCompletion(current: Todo, done: boolean, opts: MutationOptions): Todo {
+    const next: Todo = compact({
+      ...current,
+      done,
+      completedAt: done ? nowIso() : undefined,
+      updatedAt: nowIso(),
+    }) as Todo;
+    this.persist('todos', this.todos().map((todo) => (todo.id === current.id ? next : todo)));
+    this.log({ action: done ? 'completed' : 'reopened', kind: 'todo', id: next.id, actor: opts.actor ?? this.defaultActor, summary: next.title });
+    return next;
+  }
+
+  /** Reconciles generated stage tasks so only the milestone after the current column is open. */
+  reconcilePersonStageTodos(idOrName: string, opts: MutationOptions = {}): Todo | null {
+    const person = this.requirePerson(idOrName);
+    const board = this.requirePeopleBoard(this.personBoardId(person));
+    const currentId = this.resolvePeopleStage(board.id, person.stage);
+    const currentIndex = board.stages.findIndex((stage) => stage.id === currentId);
+    const nextStage = board.stages[currentIndex + 1];
+    const defaultId = this.peopleBoards[0]?.id;
+    const ts = nowIso();
+    let changed = false;
+    const todos = this.todos().flatMap((todo) => {
+      const belongs = todo.personId === person.id
+        && Boolean(todo.stageId)
+        && (todo.boardId === board.id || (!todo.boardId && board.id === defaultId));
+      if (!belongs) return [todo];
+      const stageIndex = board.stages.findIndex((stage) => stage.id === todo.stageId);
+      if (stageIndex < 0) return [todo];
+      if (stageIndex <= currentIndex && !todo.done) {
+        changed = true;
+        return [{ ...todo, done: true, completedAt: ts, updatedAt: ts }];
+      }
+      if (nextStage && stageIndex === currentIndex + 1 && todo.done) {
+        changed = true;
+        const reopened = { ...todo, done: false, updatedAt: ts } as Todo;
+        delete reopened.completedAt;
+        return [reopened];
+      }
+      if (stageIndex > currentIndex + 1 && !todo.done) {
+        changed = true;
+        return [];
+      }
+      return [todo];
+    });
+    if (changed) this.persist('todos', todos);
+    if (!nextStage) return null;
+    return this.ensureWorkflowStageTodo(person, board, nextStage, opts);
+  }
+
+  reconcilePeopleWorkflows(opts: MutationOptions = {}): void {
+    for (const person of this.people().filter((item) => !item.archived)) this.reconcilePersonStageTodos(person.id, opts);
+  }
+
+  /** Ensures the next milestone after the person's current column is in To do. */
+  ensurePersonStageTodo(idOrName: string, _stageInput?: string, opts: MutationOptions = {}): Todo | null {
+    return this.reconcilePersonStageTodos(idOrName, opts);
+  }
+
+  /** Moves a person to an exact board column and opens the milestone after it. */
+  movePersonStage(idOrName: string, stageInput: string, opts: MutationOptions = {}): { person: Person; todo: Todo | null } {
     const current = this.requirePerson(idOrName);
     const board = this.requirePeopleBoard(this.personBoardId(current));
     const fromId = this.resolvePeopleStage(board.id, current.stage);
@@ -483,52 +541,56 @@ export class Vault {
     const fromIndex = stages.findIndex((stage) => stage.id === fromId);
     const targetIndex = stages.findIndex((stage) => stage.id === targetId);
 
-    if (fromId !== targetId && targetIndex > fromIndex) {
-      const previous = this.ensurePersonStageTodo(current.id, fromId, opts);
-      if (!previous.done) this.completeTodo(previous.id, true, opts);
+    if (targetIndex > fromIndex) {
+      for (const stage of stages.slice(fromIndex + 1, targetIndex + 1)) {
+        let achieved = this.ensureWorkflowStageTodo(current, board, stage, opts);
+        if (!achieved.done) achieved = this.setTodoCompletion(achieved, true, opts);
+      }
     }
 
     const person = fromId === targetId
       ? current
-      : this.updatePerson(current.id, { stage: targetId, stageCompletedAt: undefined }, opts);
-    let todo = this.ensurePersonStageTodo(person.id, targetId, opts);
-    if (fromId !== targetId && todo.done) todo = this.completeTodo(todo.id, false, opts);
+      : this.updatePerson(current.id, {
+          stage: targetId,
+          stageCompletedAt: targetIndex === stages.length - 1 ? nowIso() : undefined,
+        }, opts);
+    const todo = this.reconcilePersonStageTodos(person.id, opts);
     return { person, todo };
   }
 
-  /** Checks off the current stage, advances the person, and opens the next todo. */
+  /** Reaches the next workflow milestone and opens the one after it. */
   advancePersonStage(idOrName: string, opts: MutationOptions = {}): { person: Person; completed: Todo; next: Todo | null } {
     const current = this.requirePerson(idOrName);
     const board = this.requirePeopleBoard(this.personBoardId(current));
     const stageId = this.resolvePeopleStage(board.id, current.stage);
     const stages = board.stages;
     const index = stages.findIndex((stage) => stage.id === stageId);
-    let completed = this.ensurePersonStageTodo(current.id, stageId, opts);
-    if (!completed.done) completed = this.completeTodo(completed.id, true, opts);
-
     const nextStage = stages[index + 1];
     if (!nextStage) {
+      let completed = this.ensureWorkflowStageTodo(current, board, stages[index], opts);
+      if (!completed.done) completed = this.setTodoCompletion(completed, true, opts);
       const person = current.stageCompletedAt
         ? current
         : this.updatePerson(current.id, { stageCompletedAt: nowIso() }, opts);
       return { person, completed, next: null };
     }
 
+    let completed = this.ensureWorkflowStageTodo(current, board, nextStage, opts);
+    if (!completed.done) completed = this.setTodoCompletion(completed, true, opts);
     const person = this.updatePerson(current.id, { stage: nextStage.id, stageCompletedAt: undefined }, opts);
-    const next = this.ensurePersonStageTodo(person.id, nextStage.id, opts);
+    const next = this.reconcilePersonStageTodos(person.id, opts);
     return { person, completed, next };
   }
 
   /** Reassigns a contact to another workflow and starts its first column. */
-  movePersonBoard(idOrName: string, boardInput: string, opts: MutationOptions = {}): { person: Person; todo: Todo } {
+  movePersonBoard(idOrName: string, boardInput: string, opts: MutationOptions = {}): { person: Person; todo: Todo | null } {
     const current = this.requirePerson(idOrName);
     const board = this.requirePeopleBoard(boardInput);
     const stage = board.stages[0].id;
     const person = this.personBoardId(current) === board.id && current.stage === stage
       ? current
       : this.updatePerson(current.id, { boardId: board.id, stage, stageCompletedAt: undefined }, opts);
-    let todo = this.ensurePersonStageTodo(person.id, stage, opts);
-    if (todo.done) todo = this.completeTodo(todo.id, false, opts);
+    const todo = this.reconcilePersonStageTodos(person.id, opts);
     return { person, todo };
   }
 
@@ -785,15 +847,24 @@ export class Vault {
 
   completeTodo(idOrTitle: string, done = true, opts: MutationOptions = {}): Todo {
     const current = this.requireTodo(idOrTitle);
-    const next: Todo = compact({
-      ...current,
-      done,
-      completedAt: done ? nowIso() : undefined,
-      updatedAt: nowIso(),
-    }) as Todo;
-    this.persist('todos', this.todos().map((t) => (t.id === current.id ? next : t)));
-    this.log({ action: done ? 'completed' : 'reopened', kind: 'todo', id: next.id, actor: opts.actor ?? this.defaultActor, summary: next.title });
-    return next;
+    const next = this.setTodoCompletion(current, done, opts);
+    if (!current.personId || !current.stageId) return next;
+
+    const person = this.person(current.personId);
+    if (!person) return next;
+    const personBoardId = this.personBoardId(person);
+    if (current.boardId && current.boardId !== personBoardId) return next;
+    const board = this.requirePeopleBoard(personBoardId);
+    const stageIndex = board.stages.findIndex((stage) => stage.id === current.stageId);
+    if (stageIndex < 0) return next;
+
+    if (done) {
+      this.movePersonStage(person.id, current.stageId, opts);
+    } else {
+      const previousStage = board.stages[stageIndex - 1];
+      if (previousStage) this.movePersonStage(person.id, previousStage.id, opts);
+    }
+    return this.requireTodo(current.id);
   }
 
   deleteTodo(idOrTitle: string, opts: MutationOptions = {}): Todo {

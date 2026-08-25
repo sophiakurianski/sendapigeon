@@ -4,6 +4,9 @@ A lightweight, agent-first CRM. People, companies, deals, todos and meeting
 notes, stored as plain files you own — one JSON record per line and markdown
 notes in a folder, like an Obsidian vault.
 
+> **Pre-1.0:** SendAPigeon is usable today, but its APIs and file format may
+> still evolve. Back up a vault before upgrading or importing important data.
+
 It is headless first. The CLI, the MCP server and the REST API all drive the
 same core, so you can point a coding agent or Hermes at it and it can actually
 do things. The web UI is a view onto the same files, not the source of truth.
@@ -67,13 +70,30 @@ PIGEON_VAULT=~/SendAPigeon PIGEON_ACTOR=my-agent your-agent-command
 ```
 
 For a repo-specific CRM, initialise `.sendapigeon` in the repository. Agents
-working in that repository will discover it automatically:
+working in that repository will discover it automatically. The project
+`.gitignore` excludes this folder; do not commit a real vault or its contact
+data to a public repository.
 
 ```bash
 pigeon init .sendapigeon
 ```
 
 Run `pigeon agents` at any time to print the generated agent instructions.
+
+## Multiple vaults
+
+Vaults can live in completely different folders and never share records. In
+the web UI, click **Current loft** at the bottom of the sidebar to open the
+vault manager. From there you can:
+
+- switch between remembered vaults;
+- create a clean vault in a new folder;
+- open an existing SendAPigeon vault folder; or
+- forget a vault without deleting its folder or data.
+
+The selected vault becomes the default for the CLI and MCP server as well. You
+can still target a specific folder explicitly with `--vault` or
+`PIGEON_VAULT`.
 
 ## What is on disk
 
@@ -198,6 +218,11 @@ honest.
 pigeon serve --open        # http://127.0.0.1:4477
 ```
 
+The local server has no authentication and intentionally binds to
+`127.0.0.1`. Do not bind it to a public interface or expose it directly to the
+internet. See the [security policy](SECURITY.md) before deploying it anywhere
+other than your own machine.
+
 Drag deals between stages, work the todo list, read notes. Every deal card
 carries a postmark showing how many days it has sat in its current stage — it
 inks up as the deal goes stale, so a stuck pipeline is visible before you read a
@@ -207,6 +232,9 @@ The JSON API is on the same port:
 
 | Method | Path | |
 |---|---|---|
+| `GET` `POST` | `/api/vaults` | list or create vaults |
+| `POST` | `/api/vaults/{open,switch}` | open or switch folder-backed vaults |
+| `DELETE` | `/api/vaults` | forget a vault without deleting its files |
 | `GET` | `/api/board` | kanban, grouped by stage |
 | `GET` | `/api/stats` | pipeline and workload summary |
 | `GET` | `/api/search?q=` | across every record and note body |
@@ -241,7 +269,7 @@ friends are all understood, and companies referenced by name are created.
 ```bash
 npm run dev          # API on :4477 against your default vault
 npm run dev:web      # Vite on :4478, proxying /api to :4477
-npm test             # 46 tests over the core, the file format and the REST API
+npm test             # 48 tests over the core, the file format and the REST API
 npm run typecheck
 ```
 
@@ -249,6 +277,19 @@ Layout: `src/core` is the whole model and has no idea the others exist;
 `src/cli`, `src/server` and `src/mcp` are three thin adapters over it; `web/` is
 the React UI.
 
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before
+opening a pull request, follow the [Code of Conduct](CODE_OF_CONDUCT.md), and
+report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
 ## Licence
 
-MIT.
+SendAPigeon is open-source software under the [MIT License](LICENSE). You may
+use, modify, self-host and redistribute it, including commercially.
+
+This follows a model similar to Sanity's open-source Studio and CLI: the local
+product stays permissively licensed, while an optional managed SendAPigeon
+service may be offered separately. A hosted service can charge for convenience
+and cloud-only capabilities such as managed sync, authentication, teams,
+backups and operations. MIT also permits other people to fork the project or
+offer competing hosting; it does not grant an exclusive right to the SaaS
+market.

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { api, type Config, type Hit, type Stats } from './api';
 import { PigeonMark } from './components/Pigeon';
+import { VaultManager } from './components/VaultManager';
 import { BoardView } from './views/BoardView';
 import { PeopleView } from './views/PeopleView';
 import { CompaniesView } from './views/CompaniesView';
@@ -162,6 +163,8 @@ function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const [version, setVersion] = useState(0);
+  const [vaultManagerOpen, setVaultManagerOpen] = useState(false);
+  const revision = useRef<string | null>(null);
 
   /** Bumping the version re-runs every view's loader. */
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
@@ -173,7 +176,46 @@ function App() {
 
   useEffect(() => {
     api.config().then(setConfig).catch((e) => notify(e.message, true));
-  }, [notify]);
+  }, [version, notify]);
+
+  useEffect(() => {
+    let stopped = false;
+    let polling = false;
+    let timer = 0;
+
+    const poll = async () => {
+      if (stopped || polling) return;
+      polling = true;
+      window.clearTimeout(timer);
+      if (document.visibilityState !== 'hidden') {
+        try {
+          const state = await api.revision();
+          if (stopped) return;
+          const next = `${state.vault}:${state.revision}`;
+          if (revision.current !== null && revision.current !== next) refresh();
+          revision.current = next;
+        } catch {
+          // The normal loaders surface server errors; background sync stays quiet.
+        }
+      }
+      polling = false;
+      if (!stopped) timer = window.setTimeout(poll, 1500);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        window.clearTimeout(timer);
+        void poll();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    void poll();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [refresh]);
 
   useEffect(() => {
     api.stats().then((s) => {
@@ -211,14 +253,14 @@ function App() {
             </button>
           ))}
         </div>
-        <div className="rail-foot">
+        <button className="rail-foot" onClick={() => setVaultManagerOpen(true)} aria-label={`Switch vault. Current vault: ${config?.name ?? 'Vault'}`}>
           <span className="vault-icon" aria-hidden="true"><PigeonMark size={23} /></span>
-          <span>
+          <span className="vault-copy">
             <span className="vault-label">Current loft</span>
             <b>{config?.name ?? 'Vault'}</b>
             <small>{stats ? `${stats.people} people · ${stats.companies} companies` : 'Loading…'}</small>
           </span>
-        </div>
+        </button>
       </nav>
 
       <main className="main">
@@ -248,8 +290,11 @@ function App() {
           onSelect={select}
           notify={notify}
           refresh={refresh}
+          version={version}
         />
       )}
+
+      <VaultManager open={vaultManagerOpen} onClose={() => setVaultManagerOpen(false)} />
 
       {toast && <div className={toast.error ? 'toast error' : 'toast'} role="status" aria-live="polite">{toast.text}</div>}
     </div>

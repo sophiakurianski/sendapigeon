@@ -32,7 +32,17 @@ const qs = (params: Record<string, unknown> = {}): string => {
 };
 
 export const api = {
+  vaults: () => request<VaultSummary[]>('/vaults'),
+  createVault: (input: { name: string; path: string; currency?: string }) =>
+    request<VaultSummary>('/vaults', { method: 'POST', body: JSON.stringify(input) }),
+  openVault: (path: string) =>
+    request<VaultSummary>('/vaults/open', { method: 'POST', body: JSON.stringify({ path }) }),
+  switchVault: (path: string) =>
+    request<VaultSummary>('/vaults/switch', { method: 'POST', body: JSON.stringify({ path }) }),
+  forgetVault: (path: string) =>
+    request<{ path: string; forgotten: boolean; deleted: false }>('/vaults', { method: 'DELETE', body: JSON.stringify({ path }) }),
   config: () => request<Config>('/config'),
+  revision: () => request<{ vault: string; revision: string }>('/revision'),
   stats: () => request<Stats>('/stats'),
   board: (params?: Record<string, unknown>) => request<Board>(`/board${qs(params)}`),
   peopleBoard: (board?: string) => request<PersonBoard>(`/people-board${qs({ board })}`),
@@ -55,13 +65,13 @@ export const api = {
   updatePerson: (id: string, patch: Partial<Person> & { company?: string }) =>
     request<Person>(`/people/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   movePersonBoard: (id: string, boardId: string) =>
-    request<{ person: Person; todo: Todo }>(`/people/${encodeURIComponent(id)}/board`, { method: 'POST', body: JSON.stringify({ boardId }) }),
+    request<{ person: Person; todo: Todo | null }>(`/people/${encodeURIComponent(id)}/board`, { method: 'POST', body: JSON.stringify({ boardId }) }),
   advancePersonStage: (id: string) =>
     request<{ person: Person; completed: Todo; next: Todo | null }>(`/people/${encodeURIComponent(id)}/stage/advance`, { method: 'POST', body: '{}' }),
   movePersonStage: (id: string, stage: string) =>
-    request<{ person: Person; todo: Todo }>(`/people/${encodeURIComponent(id)}/stage/move`, { method: 'POST', body: JSON.stringify({ stage }) }),
+    request<{ person: Person; todo: Todo | null }>(`/people/${encodeURIComponent(id)}/stage/move`, { method: 'POST', body: JSON.stringify({ stage }) }),
   ensurePersonStage: (id: string) =>
-    request<Todo>(`/people/${encodeURIComponent(id)}/stage/ensure`, { method: 'POST', body: '{}' }),
+    request<Todo | null>(`/people/${encodeURIComponent(id)}/stage/ensure`, { method: 'POST', body: '{}' }),
 
   deals: (params?: Record<string, unknown>) => request<Deal[]>(`/deals${qs(params)}`),
   deal: (id: string) => request<DealDetail>(`/deals/${encodeURIComponent(id)}`),
@@ -86,6 +96,7 @@ export const api = {
 // ------------------------------------------------------------------- types
 
 export interface Stage { id: string; name: string; probability?: number }
+export interface VaultSummary { path: string; name: string; current: boolean; exists: boolean; people: number; companies: number }
 export interface PeopleBoardTemplate { id: string; name: string; stages: Stage[] }
 export interface Config { name: string; currency: string; stages: Stage[]; peopleBoards: PeopleBoardTemplate[] }
 

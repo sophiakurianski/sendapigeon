@@ -40,7 +40,7 @@ export interface Person extends BaseRecord {
   email?: string;
   phone?: string;
   linkedin?: string;
-  /** Current position in the contact workflow. Uses a configured stage id. */
+  /** Latest workflow milestone reached. The following stage is the open to-do. */
   stage?: string;
   /** Named people workflow this contact belongs to. */
   boardId?: string;

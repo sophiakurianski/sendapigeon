@@ -47,14 +47,13 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
       if (mode === 'people') {
         const sourceIndex = peopleBoard?.columns.findIndex((column) => column.people.some((person) => person.id === id)) ?? -1;
         const targetIndex = peopleBoard?.columns.findIndex((column) => column.id === stageId) ?? -1;
-        const sourceStage = sourceIndex >= 0 ? peopleBoard?.columns[sourceIndex]?.name : undefined;
         const targetStage = targetIndex >= 0 ? peopleBoard?.columns[targetIndex]?.name : stageId;
         if (sourceIndex === targetIndex) return;
         setPeopleBoard((current) => current ? moveCard(current, id, stageId) : current);
-        await api.movePersonStage(id, stageId);
-        message = sourceStage && targetIndex > sourceIndex
-          ? `Completed ${sourceStage} · moved to ${targetStage}`
-          : `Moved to ${targetStage}`;
+        const result = await api.movePersonStage(id, stageId);
+        message = result.todo
+          ? `Moved to ${targetStage} · next: ${result.todo.title}`
+          : `Moved to ${targetStage} · workflow complete`;
       } else {
         await api.moveDeal(id, stageId);
         const stage = board?.columns.find((column) => column.id === stageId)?.name ?? stageId;
@@ -158,7 +157,7 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
           </div>
         )}
         <span className="board-mode-note">
-          {mode === 'people' ? 'Drag a person to complete this stage and open the next to-do.' : 'Deal value by sales stage.'}
+          {mode === 'people' ? 'Drag a person to a milestone; the following stage becomes their to-do.' : 'Deal value by sales stage.'}
         </span>
       </div>
 
@@ -232,7 +231,6 @@ function PersonStageCard({ person, stageName, dragging, onDragStart, onDragEnd, 
   onDragEnd: () => void;
   onOpen: () => void;
 }) {
-  const complete = Boolean(person.stageTodo?.done || person.stageCompletedAt);
   const suppressOpen = useRef(false);
   return (
     <article
@@ -255,7 +253,7 @@ function PersonStageCard({ person, stageName, dragging, onDragStart, onDragEnd, 
       </div>
       <div className="stage-drag-hint" aria-hidden="true">
         <span className="drag-grip">⠿</span>
-        <span>{complete ? 'Workflow complete' : 'Drag to move stage'}</span>
+        <span>{person.stageTodo ? `Next: ${person.stageTodo.title}` : 'Workflow complete'}</span>
       </div>
     </article>
   );
@@ -268,7 +266,7 @@ function moveCard(board: PersonBoard, personId: string, targetId: string): Perso
     ...person,
     stage: targetId,
     stageCompletedAt: undefined,
-    stageTodo: person.stageTodo ? { ...person.stageTodo, done: false } : null,
+    stageTodo: null,
   };
   const columns = board.columns.map((column) => {
     const people = column.people.filter((item) => item.id !== personId);

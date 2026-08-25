@@ -4,6 +4,14 @@
   "description": "Agent-first, headless, file-based CRM. People, companies, deals, todos and meeting notes in a portable vault.",
   "type": "module",
   "license": "MIT",
+  "keywords": [
+    "crm",
+    "local-first",
+    "mcp",
+    "ai-agent",
+    "cli",
+    "kanban"
+  ],
   "bin": {
     "pigeon": "./dist/cli/index.js",
     "sendapigeon": "./dist/cli/index.js"
@@ -17,7 +25,8 @@
     "dist",
     "web/dist",
     "docs",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"

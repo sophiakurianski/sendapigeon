@@ -1,6 +1,6 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -20,7 +20,7 @@ describe('rest api', () => {
     vault.createPerson({ name: 'Jane Doe', company: 'Acme Corp', email: 'jane@acme.com' });
     vault.createDeal({ title: 'Acme renewal', company: 'Acme Corp', value: 24000, people: ['Jane Doe'] });
 
-    server = createServer(createApp(root));
+    server = createServer(createApp(root, { persistVaultSelection: false }));
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     base = `http://127.0.0.1:${server.address().port}`;
   });
@@ -48,6 +48,40 @@ describe('rest api', () => {
     assert.equal(status, 200);
     assert.equal(body.name, 'sendapigeon');
     assert.ok(body.endpoints.length > 10);
+  });
+
+  test('the vault revision changes after an external write', async () => {
+    const before = await get('/api/revision');
+    const external = new Vault(root, { actor: 'agent' });
+    external.createCompany({ name: 'Revision Probe' });
+    const after = await get('/api/revision');
+
+    assert.equal(before.status, 200);
+    assert.equal(after.body.vault, root);
+    assert.notEqual(after.body.revision, before.body.revision);
+    external.deleteCompany('revision-probe');
+  });
+
+  test('vault folders stay isolated and can be switched at runtime', async () => {
+    const secondPath = join(root, 'separate-vault');
+    const created = await send('POST', '/api/vaults', { name: 'Separate studio', path: secondPath, currency: 'USD' });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.name, 'Separate studio');
+    assert.equal(created.body.current, true);
+
+    await send('POST', '/api/companies', { name: 'Second Vault Co' });
+    const secondStats = await get('/api/stats');
+    assert.equal(secondStats.body.companies, 1);
+    assert.equal(secondStats.body.people, 0);
+
+    await send('POST', '/api/vaults/switch', { path: root });
+    const originalCompanies = await get('/api/companies');
+    assert.equal(originalCompanies.body.some((company) => company.name === 'Acme Corp'), true);
+    assert.equal(originalCompanies.body.some((company) => company.name === 'Second Vault Co'), false);
+
+    const forgotten = await send('DELETE', '/api/vaults', { path: secondPath });
+    assert.equal(forgotten.body.deleted, false);
+    assert.equal(existsSync(secondPath), true);
   });
 
   test('board groups open deals into stage columns', async () => {
@@ -103,20 +137,25 @@ describe('rest api', () => {
     assert.equal(body.location, 'Sydney, Australia');
   });
 
-  test('people board stages are linked to todos and advance together', async () => {
+  test('a board column is the reached milestone and the following stage is the todo', async () => {
     const board = await get('/api/people-board');
     const jane = board.body.columns.flatMap((column) => column.people).find((person) => person.id === 'jane-doe');
     assert.equal(jane.stage, 'lead');
-    assert.equal(jane.stageTodo.title, 'Lead In');
+    assert.equal(jane.stageTodo.title, 'Contacted');
     assert.equal(jane.stageTodo.done, false);
 
-    const advanced = await send('POST', '/api/people/jane-doe/stage/advance');
-    assert.equal(advanced.body.completed.done, true);
-    assert.equal(advanced.body.person.stage, 'contacted');
-    assert.equal(advanced.body.next.stageId, 'contacted');
+    const reached = await send('POST', `/api/todos/${jane.stageTodo.id}/toggle`, { done: true });
+    assert.equal(reached.body.done, true);
+    assert.equal(reached.body.stageId, 'contacted');
+
+    const movedBoard = await get('/api/people-board');
+    const movedJane = movedBoard.body.columns.flatMap((column) => column.people).find((person) => person.id === 'jane-doe');
+    assert.equal(movedJane.stage, 'contacted');
+    assert.equal(movedJane.stageTodo.title, 'Demo');
 
     const todos = await get('/api/todos?person=jane-doe&done=false');
-    assert.equal(todos.body.some((todo) => todo.stageId === 'contacted'), true);
+    assert.equal(todos.body.some((todo) => todo.stageId === 'contacted'), false);
+    assert.equal(todos.body.some((todo) => todo.stageId === 'demo'), true);
   });
 
   test('people boards can be created, edited and selected through the api', async () => {
@@ -129,7 +168,7 @@ describe('rest api', () => {
 
     const assigned = await send('POST', '/api/people/alex-smith/board', { boardId: created.body.id });
     assert.equal(assigned.body.person.boardId, created.body.id);
-    assert.equal(assigned.body.todo.title, 'Invite');
+    assert.equal(assigned.body.todo.title, 'Onboard');
 
     const selected = await get(`/api/people-board?board=${created.body.id}`);
     assert.equal(selected.body.name, 'Community launch');

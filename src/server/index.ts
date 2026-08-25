@@ -1,9 +1,11 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Vault, VaultError } from '../core/store.js';
+import { expandHome, forgetVault, rememberedVaults, rememberVault } from '../core/config.js';
 import {
   board,
   expandCompany,
@@ -61,15 +63,42 @@ function parseFilter(query: Record<string, unknown>): ListFilter {
   };
 }
 
-export function createApp(vaultPath: string) {
+/** A cheap fingerprint for data another local process may have changed. */
+function vaultRevision(path: string): string {
+  const vault = new Vault(path);
+  const hash = createHash('sha1');
+  const visit = (target: string) => {
+    if (!existsSync(target)) return;
+    const stat = statSync(target);
+    hash.update(`${relative(path, target)}:${stat.size}:${stat.mtimeMs}\n`);
+    if (stat.isDirectory()) {
+      for (const entry of readdirSync(target).sort()) visit(join(target, entry));
+    }
+  };
+  visit(vault.paths.config);
+  visit(vault.paths.data);
+  visit(vault.paths.notes);
+  return hash.digest('hex');
+}
+
+export function createApp(vaultPath: string, options: { persistVaultSelection?: boolean } = {}) {
   const app = express();
+  const persistVaultSelection = options.persistVaultSelection !== false;
+  let activeVaultPath = resolve(expandHome(vaultPath));
+  const vaultRegistry = new Set(persistVaultSelection ? rememberedVaults() : []);
+  vaultRegistry.add(activeVaultPath);
+  const reconcileVault = (path: string) => {
+    const vault = new Vault(path, { actor: 'workflow-migration' });
+    if (vault.exists()) vault.reconcilePeopleWorkflows({ actor: 'workflow-migration' });
+  };
+  reconcileVault(activeVaultPath);
   app.use(express.json({ limit: '8mb' }));
   app.use(express.text({ type: ['text/*'], limit: '8mb' }));
 
   /** A fresh Vault per request so edits made outside the server are picked up. */
   const withVault = (req: Request): Vault => {
     const actor = (req.header('x-pigeon-actor') || (req.query.actor as string) || 'web').slice(0, 64);
-    const v = new Vault(vaultPath, { actor });
+    const v = new Vault(activeVaultPath, { actor });
     v.assertExists();
     return v;
   };
@@ -87,13 +116,52 @@ export function createApp(vaultPath: string) {
 
   const api = express.Router();
 
+  const describeVault = (path: string) => {
+    const vault = new Vault(path);
+    if (!vault.exists()) {
+      return { path, name: basename(path), current: path === activeVaultPath, exists: false, people: 0, companies: 0 };
+    }
+    const summary = stats(vault);
+    return {
+      path,
+      name: vault.config.name,
+      current: path === activeVaultPath,
+      exists: true,
+      people: summary.people,
+      companies: summary.companies,
+    };
+  };
+
+  const activateVault = (input: string) => {
+    if (!input?.trim()) throw new VaultError('Choose a vault folder.', 'BAD_INPUT');
+    const path = resolve(expandHome(input.trim()));
+    const vault = new Vault(path);
+    if (!vault.exists()) throw new VaultError(`No SendAPigeon vault at ${path}.`, 'NO_VAULT');
+    activeVaultPath = path;
+    vaultRegistry.add(path);
+    reconcileVault(path);
+    if (persistVaultSelection) rememberVault(path);
+    return describeVault(path);
+  };
+
+  const manage = (handler: (req: Request, res: Response) => unknown) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const result = handler(req, res);
+        if (result !== undefined && !res.headersSent) res.json(result);
+      } catch (error) {
+        next(error);
+      }
+    };
+
   api.get('/', (_req, res) => {
     res.json({
       name: 'sendapigeon',
       version: '0.1.0',
-      vault: vaultPath,
+      vault: activeVaultPath,
       endpoints: [
-        'GET /api/config', 'GET /api/stats', 'GET /api/board', 'GET /api/people-board', 'POST|PATCH|DELETE /api/people-boards', 'GET /api/search?q=',
+        'GET|POST /api/vaults', 'POST /api/vaults/{open,switch}', 'DELETE /api/vaults',
+        'GET /api/config', 'GET /api/revision', 'GET /api/stats', 'GET /api/board', 'GET /api/people-board', 'POST|PATCH|DELETE /api/people-boards', 'GET /api/search?q=',
         'GET|POST /api/companies', 'GET|PATCH|DELETE /api/companies/:id',
         'GET|POST /api/people', 'GET|PATCH|DELETE /api/people/:id', 'POST /api/people/:id/stage/{ensure,advance,move}',
         'GET|POST /api/deals', 'GET|PATCH|DELETE /api/deals/:id',
@@ -105,7 +173,36 @@ export function createApp(vaultPath: string) {
     });
   });
 
+  api.get('/vaults', manage(() => [...vaultRegistry]
+    .map(describeVault)
+    .sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name))));
+  api.post('/vaults', manage((req, res) => {
+    const pathInput = String(req.body?.path ?? '').trim();
+    const name = String(req.body?.name ?? '').trim();
+    if (!pathInput) throw new VaultError('Choose where the new vault should live.', 'BAD_INPUT');
+    if (!name) throw new VaultError('Give the new vault a name.', 'BAD_INPUT');
+    const path = resolve(expandHome(pathInput));
+    const vault = new Vault(path, { actor: 'web' });
+    vault.init({ name, currency: String(req.body?.currency ?? 'AUD') });
+    vaultRegistry.add(path);
+    activeVaultPath = path;
+    reconcileVault(path);
+    if (persistVaultSelection) rememberVault(path);
+    res.status(201);
+    return describeVault(path);
+  }));
+  api.post('/vaults/open', manage((req) => activateVault(String(req.body?.path ?? ''))));
+  api.post('/vaults/switch', manage((req) => activateVault(String(req.body?.path ?? ''))));
+  api.delete('/vaults', manage((req) => {
+    const path = resolve(expandHome(String(req.body?.path ?? '').trim()));
+    if (path === activeVaultPath) throw new VaultError('Switch to another vault before forgetting this one.', 'BAD_INPUT');
+    vaultRegistry.delete(path);
+    if (persistVaultSelection) forgetVault(path);
+    return { path, forgotten: true, deleted: false };
+  }));
+
   api.get('/config', wrap((_req, _res, v) => v.config));
+  api.get('/revision', manage(() => ({ vault: activeVaultPath, revision: vaultRevision(activeVaultPath) })));
   api.patch('/config', wrap((req, _res, v) => v.setConfig(req.body)));
   api.get('/stats', wrap((_req, _res, v) => stats(v)));
   api.get('/board', wrap((req, _res, v) => board(v, parseFilter(req.query as Record<string, unknown>))));
