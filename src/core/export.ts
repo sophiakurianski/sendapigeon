@@ -7,7 +7,7 @@ import type { Vault } from './store.js';
 
 const COLUMNS: Record<string, string[]> = {
   companies: ['id', 'name', 'domain', 'website', 'industry', 'size', 'location', 'phone', 'owner', 'tags', 'description', 'createdAt', 'updatedAt'],
-  people: ['id', 'name', 'companyId', 'title', 'email', 'phone', 'linkedin', 'location', 'owner', 'tags', 'description', 'createdAt', 'updatedAt'],
+  people: ['id', 'name', 'companyId', 'title', 'email', 'phone', 'linkedin', 'location', 'owner', 'tags', 'description', 'boardId', 'stage', 'workflowExcluded', 'createdAt', 'updatedAt'],
   deals: ['id', 'title', 'companyId', 'personIds', 'stage', 'status', 'value', 'currency', 'probability', 'expectedCloseDate', 'closedAt', 'lostReason', 'source', 'owner', 'tags', 'createdAt', 'updatedAt'],
   todos: ['id', 'title', 'done', 'dueDate', 'priority', 'companyId', 'personId', 'dealId', 'owner', 'tags', 'completedAt', 'createdAt', 'updatedAt'],
   notes: ['id', 'title', 'date', 'type', 'companyId', 'dealId', 'attendees', 'tags', 'path'],

@@ -157,7 +157,7 @@ export class Vault {
     const stages = patch.stages === undefined ? current.stages : this.normalisePeopleStages(patch.stages, current.stages);
     const stageIds = new Set(stages.map((stage) => stage.id));
     const removed = new Set(current.stages.filter((stage) => !stageIds.has(stage.id)).map((stage) => stage.id));
-    const occupants = this.people().filter((person) => this.personBoardId(person) === current.id && removed.has(String(person.stage)));
+    const occupants = this.people().filter((person) => !person.workflowExcluded && this.personBoardId(person) === current.id && removed.has(String(person.stage)));
     if (occupants.length) {
       throw new VaultError(
         `Move ${occupants.length} ${occupants.length === 1 ? 'person' : 'people'} out of the column before removing it.`,
@@ -175,13 +175,16 @@ export class Vault {
       const title = todo.stageId && renamed.get(todo.stageId);
       return belongs && title && todo.title !== title ? { ...todo, title, updatedAt: ts } : todo;
     }));
+    for (const person of this.people().filter((item) => !item.archived && !item.workflowExcluded && this.personBoardId(item) === current.id)) {
+      this.reconcilePersonStageTodos(person.id);
+    }
     return next;
   }
 
   deletePeopleBoard(id: string): PeopleBoardTemplate {
     const current = this.requirePeopleBoard(id);
     if (this.peopleBoards.length === 1) throw new VaultError('The workspace needs at least one people board.', 'BAD_INPUT');
-    const occupants = this.people().filter((person) => this.personBoardId(person) === current.id);
+    const occupants = this.people().filter((person) => !person.workflowExcluded && this.personBoardId(person) === current.id);
     if (occupants.length) {
       throw new VaultError(
         `Move ${occupants.length} ${occupants.length === 1 ? 'person' : 'people'} to another board before deleting it.`,
@@ -410,7 +413,7 @@ export class Vault {
     appendJsonl(this.paths.people, record);
     list.push(record);
     this.log({ action: 'created', kind: 'person', id: record.id, actor: opts.actor ?? this.defaultActor, summary: record.name });
-    this.ensurePersonStageTodo(record.id, stage, opts);
+    if (!record.workflowExcluded) this.ensurePersonStageTodo(record.id, stage, opts);
     return record;
   }
 
@@ -487,6 +490,7 @@ export class Vault {
   /** Reconciles generated stage tasks so only the milestone after the current column is open. */
   reconcilePersonStageTodos(idOrName: string, opts: MutationOptions = {}): Todo | null {
     const person = this.requirePerson(idOrName);
+    if (person.workflowExcluded) return null;
     const board = this.requirePeopleBoard(this.personBoardId(person));
     const currentId = this.resolvePeopleStage(board.id, person.stage);
     const currentIndex = board.stages.findIndex((stage) => stage.id === currentId);
@@ -523,7 +527,7 @@ export class Vault {
   }
 
   reconcilePeopleWorkflows(opts: MutationOptions = {}): void {
-    for (const person of this.people().filter((item) => !item.archived)) this.reconcilePersonStageTodos(person.id, opts);
+    for (const person of this.people().filter((item) => !item.archived && !item.workflowExcluded)) this.reconcilePersonStageTodos(person.id, opts);
   }
 
   /** Ensures the next milestone after the person's current column is in To do. */
@@ -548,11 +552,12 @@ export class Vault {
       }
     }
 
-    const person = fromId === targetId
+    const person = fromId === targetId && !current.workflowExcluded
       ? current
       : this.updatePerson(current.id, {
           stage: targetId,
           stageCompletedAt: targetIndex === stages.length - 1 ? nowIso() : undefined,
+          workflowExcluded: false,
         }, opts);
     const todo = this.reconcilePersonStageTodos(person.id, opts);
     return { person, todo };
@@ -587,11 +592,35 @@ export class Vault {
     const current = this.requirePerson(idOrName);
     const board = this.requirePeopleBoard(boardInput);
     const stage = board.stages[0].id;
-    const person = this.personBoardId(current) === board.id && current.stage === stage
+    const person = this.personBoardId(current) === board.id && current.stage === stage && !current.workflowExcluded
       ? current
-      : this.updatePerson(current.id, { boardId: board.id, stage, stageCompletedAt: undefined }, opts);
+      : this.updatePerson(current.id, { boardId: board.id, stage, stageCompletedAt: undefined, workflowExcluded: false }, opts);
     const todo = this.reconcilePersonStageTodos(person.id, opts);
     return { person, todo };
+  }
+
+  /** Removes a contact from workflow boards without deleting their CRM record. */
+  removePersonFromWorkflow(idOrName: string, opts: MutationOptions = {}): Person {
+    const current = this.requirePerson(idOrName);
+    if (current.workflowExcluded) return current;
+    const board = this.requirePeopleBoard(this.personBoardId(current));
+    const defaultId = this.peopleBoards[0]?.id;
+    this.persist('todos', this.todos().filter((todo) => {
+      const generatedForBoard = todo.personId === current.id
+        && Boolean(todo.stageId)
+        && (todo.boardId === board.id || (!todo.boardId && board.id === defaultId));
+      return !generatedForBoard || todo.done;
+    }));
+    const person: Person = { ...current, workflowExcluded: true, updatedAt: nowIso() };
+    this.persist('people', this.people().map((item) => item.id === current.id ? person : item));
+    this.log({
+      action: 'workflow_removed',
+      kind: 'person',
+      id: person.id,
+      actor: opts.actor ?? this.defaultActor,
+      summary: `${person.name} removed from ${board.name}`,
+    });
+    return person;
   }
 
   // ------------------------------------------------------------------ deals
@@ -852,6 +881,7 @@ export class Vault {
 
     const person = this.person(current.personId);
     if (!person) return next;
+    if (person.workflowExcluded) return next;
     const personBoardId = this.personBoardId(person);
     if (current.boardId && current.boardId !== personBoardId) return next;
     const board = this.requirePeopleBoard(personBoardId);

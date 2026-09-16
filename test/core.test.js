@@ -128,6 +128,21 @@ describe('records', () => {
     const edited = vault.updatePeopleBoard(custom.id, { stages: [{ id: 'check-in', name: 'Follow up' }, { name: 'Close loop' }] });
     assert.deepEqual(edited.stages.map((stage) => stage.name), ['Follow up', 'Close loop']);
     assert.equal(vault.todos().find((todo) => todo.personId === 'jane-doe' && todo.boardId === custom.id && todo.stageId === 'check-in').title, 'Follow up');
+
+    const reordered = vault.updatePeopleBoard(custom.id, { stages: [edited.stages[1], edited.stages[0]] });
+    assert.deepEqual(reordered.stages.map((stage) => stage.name), ['Close loop', 'Follow up']);
+
+    const removed = vault.removePersonFromWorkflow('jane-doe', { actor: 'web' });
+    assert.equal(removed.workflowExcluded, true);
+    assert.equal(personBoard(vault, custom.id).total, 0);
+    assert.equal(vault.todos().some((todo) => todo.personId === 'jane-doe' && todo.boardId === custom.id && !todo.done), false);
+    assert.equal(vault.activity(10).some((event) => event.action === 'workflow_removed' && event.id === 'jane-doe'), true);
+
+    const rejoined = vault.movePersonBoard('jane-doe', custom.id);
+    assert.equal(rejoined.person.workflowExcluded, false);
+    assert.equal(rejoined.person.stage, 'close-loop');
+    assert.equal(rejoined.todo.stageId, 'check-in');
+    assert.equal(personBoard(vault, custom.id).total, 1);
   });
 
   test('lookups accept id, name or email', () => {

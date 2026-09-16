@@ -180,6 +180,21 @@ describe('rest api', () => {
     });
     assert.equal(edited.body.name, 'Community partners');
     assert.deepEqual(edited.body.stages.map((stage) => stage.id), ['invite', 'onboard', 'activate']);
+
+    const reordered = await send('PATCH', `/api/people-boards/${created.body.id}`, {
+      stages: [edited.body.stages[2], edited.body.stages[0], edited.body.stages[1]],
+    });
+    assert.deepEqual(reordered.body.stages.map((stage) => stage.id), ['activate', 'invite', 'onboard']);
+
+    const removed = await send('POST', '/api/people/alex-smith/board/remove');
+    assert.equal(removed.body.workflowExcluded, true);
+    const withoutAlex = await get(`/api/people-board?board=${created.body.id}`);
+    assert.equal(withoutAlex.body.total, 0);
+
+    const rejoined = await send('POST', '/api/people/alex-smith/board', { boardId: created.body.id });
+    assert.equal(rejoined.body.person.workflowExcluded, false);
+    assert.equal(rejoined.body.person.stage, 'activate');
+    assert.equal(rejoined.body.todo.stageId, 'invite');
   });
 
   test('a deal moves stage and reports it back', async () => {

@@ -41,6 +41,8 @@ export const api = {
     request<VaultSummary>('/vaults/switch', { method: 'POST', body: JSON.stringify({ path }) }),
   forgetVault: (path: string) =>
     request<{ path: string; forgotten: boolean; deleted: false }>('/vaults', { method: 'DELETE', body: JSON.stringify({ path }) }),
+  pickFolder: (initialPath?: string) =>
+    request<{ path: string | null }>('/system/pick-folder', { method: 'POST', body: JSON.stringify({ initialPath }) }),
   config: () => request<Config>('/config'),
   revision: () => request<{ vault: string; revision: string }>('/revision'),
   stats: () => request<Stats>('/stats'),
@@ -66,6 +68,8 @@ export const api = {
     request<Person>(`/people/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   movePersonBoard: (id: string, boardId: string) =>
     request<{ person: Person; todo: Todo | null }>(`/people/${encodeURIComponent(id)}/board`, { method: 'POST', body: JSON.stringify({ boardId }) }),
+  removePersonFromWorkflow: (id: string) =>
+    request<Person>(`/people/${encodeURIComponent(id)}/board/remove`, { method: 'POST', body: '{}' }),
   advancePersonStage: (id: string) =>
     request<{ person: Person; completed: Todo; next: Todo | null }>(`/people/${encodeURIComponent(id)}/stage/advance`, { method: 'POST', body: '{}' }),
   movePersonStage: (id: string, stage: string) =>
@@ -108,7 +112,7 @@ export interface Company {
 
 export interface Person {
   id: string; name: string; companyId?: string; title?: string; email?: string; phone?: string;
-  linkedin?: string; boardId?: string; stage?: string; stageCompletedAt?: string; location?: string; owner?: string; description?: string;
+  linkedin?: string; boardId?: string; stage?: string; stageCompletedAt?: string; workflowExcluded?: boolean; location?: string; owner?: string; description?: string;
   tags?: string[]; createdAt: string; updatedAt: string;
 }
 

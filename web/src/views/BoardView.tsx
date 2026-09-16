@@ -7,6 +7,7 @@ import type { ViewProps } from './types';
 
 type BoardMode = 'people' | 'deals';
 type BoardDraft = { id?: string; name: string; stages: Stage[] };
+type PersonContextMenu = { person: PersonBoardCard; x: number; y: number };
 
 export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
   const [board, setBoard] = useState<Board | null>(null);
@@ -19,6 +20,8 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
   const [editorError, setEditorError] = useState('');
   const [dragging, setDragging] = useState<string | null>(null);
   const [target, setTarget] = useState<string | null>(null);
+  const [personMenu, setPersonMenu] = useState<PersonContextMenu | null>(null);
+  const [personMenuBusy, setPersonMenuBusy] = useState(false);
 
   useEffect(() => {
     Promise.all([api.board(), api.config()])
@@ -32,8 +35,60 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
 
   useEffect(() => {
     if (!selectedBoard) return;
-    api.peopleBoard(selectedBoard).then(setPeopleBoard).catch((error) => notify(error.message, true));
+    let cancelled = false;
+    api.peopleBoard(selectedBoard)
+      .then((nextBoard) => { if (!cancelled) setPeopleBoard(nextBoard); })
+      .catch((error) => { if (!cancelled) notify(error.message, true); });
+    return () => { cancelled = true; };
   }, [selectedBoard, version, notify]);
+
+  useEffect(() => {
+    if (!personMenu) return;
+    const close = () => setPersonMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('blur', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('blur', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [personMenu]);
+
+  const openPersonMenu = (person: PersonBoardCard, x: number, y: number) => {
+    const menuWidth = 238;
+    const menuHeight = 116;
+    const edge = 10;
+    setPersonMenu({
+      person,
+      x: Math.max(edge, Math.min(x, window.innerWidth - menuWidth - edge)),
+      y: Math.max(edge, Math.min(y, window.innerHeight - menuHeight - edge)),
+    });
+  };
+
+  const removePersonFromFlow = async () => {
+    if (!personMenu || personMenuBusy) return;
+    const { person } = personMenu;
+    const previous = peopleBoard;
+    setPersonMenuBusy(true);
+    setPeopleBoard((current) => current ? removeCard(current, person.id) : current);
+    try {
+      await api.removePersonFromWorkflow(person.id);
+      setPersonMenu(null);
+      notify(`${person.name} removed from the flow`);
+      refresh();
+    } catch (error) {
+      if (previous) setPeopleBoard(previous);
+      notify((error as Error).message, true);
+    } finally {
+      setPersonMenuBusy(false);
+    }
+  };
 
   const drop = async (event: React.DragEvent, stageId: string) => {
     const id = event.dataTransfer.getData('text/plain') || dragging;
@@ -83,6 +138,7 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
         : await api.createPeopleBoard({ name, stages: stages.map(({ name: stageName }) => ({ name: stageName })) });
       const config = await api.config();
       setTemplates(config.peopleBoards);
+      if (!editor.id) setPeopleBoard(null);
       setSelectedBoard(saved.id);
       setEditor(null);
       notify(editor.id ? 'Board updated' : `${saved.name} created`);
@@ -102,6 +158,7 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
       await api.deletePeopleBoard(editor.id);
       const config = await api.config();
       setTemplates(config.peopleBoards);
+      setPeopleBoard(null);
       setSelectedBoard(config.peopleBoards[0]?.id ?? '');
       setEditor(null);
       notify('Board deleted');
@@ -113,51 +170,61 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
     }
   };
 
-  if (!board || !peopleBoard) return null;
+  const selectWorkflow = (id: string) => {
+    setMode('people');
+    setEditor(null);
+    setEditorError('');
+    setPersonMenu(null);
+    if (id !== selectedBoard) {
+      setPeopleBoard(null);
+      setSelectedBoard(id);
+    }
+  };
+
+  const startNewWorkflow = () => {
+    setMode('people');
+    setPersonMenu(null);
+    setEditorError('');
+    setEditor({ name: '', stages: [
+      { id: '', name: 'Reach out' },
+      { id: '', name: 'Follow up' },
+      { id: '', name: 'Meeting' },
+    ] });
+  };
+
+  if (!board) return null;
   const anyDeals = board.columns.some((column) => column.deals.length) || board.won.length || board.lost.length;
+  const selectedTemplate = templates.find((template) => template.id === selectedBoard);
 
   return (
     <>
       <div className="toolbar board-switcher">
-        <div className="segmented" role="group" aria-label="Board type">
-          <button aria-pressed={mode === 'people'} onClick={() => setMode('people')}>People workflow</button>
-          <button aria-pressed={mode === 'deals'} onClick={() => setMode('deals')}>Deals</button>
-        </div>
-        {mode === 'people' && (
-          <div className="people-board-tools">
-            <select
-              className="board-picker"
-              value={selectedBoard}
-              onChange={(event) => { setPeopleBoard(null); setSelectedBoard(event.target.value); setEditor(null); }}
-              aria-label="Choose people board"
-            >
-              {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
-            </select>
+        <div className="board-nav-tools">
+          <BoardPicker
+            mode={mode}
+            templates={templates}
+            selectedBoard={selectedBoard}
+            onSelectWorkflow={selectWorkflow}
+            onSelectDeals={() => { setMode('deals'); setEditor(null); setPersonMenu(null); }}
+          />
+          {mode === 'people' && (
             <button
               className="board-tool-button"
               onClick={() => {
-                const template = templates.find((item) => item.id === selectedBoard);
-                if (template) setEditor({ id: template.id, name: template.name, stages: template.stages.map((stage) => ({ ...stage })) });
+                if (selectedTemplate) setEditor({ id: selectedTemplate.id, name: selectedTemplate.name, stages: selectedTemplate.stages.map((stage) => ({ ...stage })) });
               }}
-              aria-label="Edit this board"
-              title="Edit this board"
+              aria-label="Edit current workflow"
+              title="Edit current workflow"
             >
               <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 11.8-.5 2.1 2.1-.5L13.2 4.8 11.2 2.8zM9.9 4.1l2 2" /></svg>
             </button>
-            <button
-              className="board-new-button"
-              onClick={() => setEditor({ name: 'New board', stages: [
-                { id: '', name: 'Reach out' },
-                { id: '', name: 'Follow up' },
-                { id: '', name: 'Meeting' },
-              ] })}
-            >
-              <span aria-hidden="true">＋</span> New board
-            </button>
-          </div>
-        )}
+          )}
+          <button className="board-new-button" onClick={startNewWorkflow}>
+            <span aria-hidden="true">＋</span> New workflow
+          </button>
+        </div>
         <span className="board-mode-note">
-          {mode === 'people' ? 'Drag a person to a milestone; the following stage becomes their to-do.' : 'Deal value by sales stage.'}
+          {mode === 'people' ? `${templates.length} ${templates.length === 1 ? 'workflow' : 'workflows'} · drag a person to move them forward.` : 'Deal value by sales stage.'}
         </span>
       </div>
 
@@ -175,7 +242,12 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
         />
       )}
 
-      {mode === 'people' ? (
+      {mode === 'people' && !peopleBoard ? (
+        <div className="board-loading" role="status">
+          <span className="board-loading-route" aria-hidden="true"><i /><i /><i /></span>
+          <span>Opening {selectedTemplate?.name ?? 'workflow'}…</span>
+        </div>
+      ) : mode === 'people' && peopleBoard ? (
         peopleBoard.total ? (
           <div className={dragging ? 'board people-board is-dragging' : 'board people-board'}>
             {peopleBoard.columns.map((column) => (
@@ -200,6 +272,7 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
                       onDragStart={() => setDragging(person.id)}
                       onDragEnd={() => { setDragging(null); setTarget(null); }}
                       onOpen={() => onSelect({ kind: 'person', id: person.id })}
+                      onMenu={(x, y) => openPersonMenu(person, x, y)}
                     />
                   ))}
                   {!column.people.length && dragging && <div className="column-empty">drop them here</div>}
@@ -219,17 +292,141 @@ export function BoardView({ onSelect, notify, refresh, version }: ViewProps) {
           Your people workflow is ready. Deals are for opportunities with a value and close date.
         </Empty>
       )}
+      {personMenu && mode === 'people' && (
+        <div
+          className="person-context-menu"
+          role="menu"
+          aria-label={`Actions for ${personMenu.person.name}`}
+          style={{ left: personMenu.x, top: personMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <div className="person-context-name">
+            <span>Workflow contact</span>
+            <strong>{personMenu.person.name}</strong>
+          </div>
+          <button
+            type="button"
+            className="person-context-remove"
+            role="menuitem"
+            disabled={personMenuBusy}
+            onClick={() => void removePersonFromFlow()}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3 8h10M8 3l-5 5 5 5" />
+            </svg>
+            <span>
+              <strong>{personMenuBusy ? 'Removing…' : 'Remove from flow'}</strong>
+              <small>Keep the contact in People</small>
+            </span>
+          </button>
+        </div>
+      )}
     </>
   );
 }
 
-function PersonStageCard({ person, stageName, dragging, onDragStart, onDragEnd, onOpen }: {
+function BoardPicker({ mode, templates, selectedBoard, onSelectWorkflow, onSelectDeals }: {
+  mode: BoardMode;
+  templates: PeopleBoardTemplate[];
+  selectedBoard: string;
+  onSelectWorkflow: (id: string) => void;
+  onSelectDeals: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const current = templates.find((template) => template.id === selectedBoard);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="board-picker" ref={pickerRef}>
+      <button
+        type="button"
+        className="board-picker-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((currentOpen) => !currentOpen)}
+      >
+        <span className={`board-picker-mark ${mode}`} aria-hidden="true">
+          {mode === 'people' ? (
+            <svg viewBox="0 0 24 24"><circle cx="5" cy="6" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="18" r="2" /><path d="M6.8 7.2 10.3 10.7M13.7 13.3l3.5 3.5" /></svg>
+          ) : (
+            <svg viewBox="0 0 24 24"><path d="M5 18V9M12 18V5M19 18v-6" /><path d="M2.5 18.5h19" /></svg>
+          )}
+        </span>
+        <span className="board-picker-copy">
+          <small>{mode === 'people' ? 'People workflow' : 'Sales board'}</small>
+          <strong>{mode === 'people' ? current?.name ?? 'Choose workflow' : 'Deals'}</strong>
+        </span>
+        <svg className="board-picker-chevron" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+      </button>
+
+      {open && (
+        <div className="board-picker-menu" role="menu" aria-label="Choose a board">
+          <div className="board-picker-heading">
+            <span>People workflows</span>
+            <small>{templates.length}</small>
+          </div>
+          <div className="board-picker-options">
+            {templates.map((template) => {
+              const active = mode === 'people' && template.id === selectedBoard;
+              return (
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={active}
+                  className={active ? 'board-picker-option is-active' : 'board-picker-option'}
+                  key={template.id}
+                  onClick={() => { onSelectWorkflow(template.id); setOpen(false); }}
+                >
+                  <span className="board-option-route" aria-hidden="true"><i /><i /><i /></span>
+                  <span className="board-option-copy">
+                    <strong>{template.name}</strong>
+                    <small>{template.stages.length} {template.stages.length === 1 ? 'stage' : 'stages'}</small>
+                  </span>
+                  {active && <span className="board-option-check" aria-hidden="true">✓</span>}
+                </button>
+              );
+            })}
+          </div>
+          <div className="board-picker-divider" />
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={mode === 'deals'}
+            className={mode === 'deals' ? 'board-picker-option deals is-active' : 'board-picker-option deals'}
+            onClick={() => { onSelectDeals(); setOpen(false); }}
+          >
+            <span className="board-option-deals" aria-hidden="true">◆</span>
+            <span className="board-option-copy"><strong>Deals</strong><small>Sales pipeline</small></span>
+            {mode === 'deals' && <span className="board-option-check" aria-hidden="true">✓</span>}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PersonStageCard({ person, stageName, dragging, onDragStart, onDragEnd, onOpen, onMenu }: {
   person: PersonBoardCard;
   stageName: string;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   onOpen: () => void;
+  onMenu: (x: number, y: number) => void;
 }) {
   const suppressOpen = useRef(false);
   return (
@@ -239,10 +436,19 @@ function PersonStageCard({ person, stageName, dragging, onDragStart, onDragEnd, 
       onDragStart={(event) => { suppressOpen.current = true; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', person.id); onDragStart(); }}
       onDragEnd={() => { onDragEnd(); window.setTimeout(() => { suppressOpen.current = false; }, 0); }}
       onClick={() => { if (!suppressOpen.current) onOpen(); }}
-      onKeyDown={(event) => { if (event.key === 'Enter') onOpen(); }}
+      onContextMenu={(event) => { event.preventDefault(); onMenu(event.clientX, event.clientY); }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') onOpen();
+        if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+          event.preventDefault();
+          const bounds = event.currentTarget.getBoundingClientRect();
+          onMenu(bounds.left + 22, bounds.top + 22);
+        }
+      }}
       tabIndex={0}
       role="button"
       aria-label={`${person.name}, ${stageName}`}
+      title="Right-click for workflow actions"
     >
       <div className="person-stage-head">
         <Monogram name={person.name} id={person.id} size="sm" />
@@ -277,6 +483,16 @@ function moveCard(board: PersonBoard, personId: string, targetId: string): Perso
   return { ...board, columns };
 }
 
+function removeCard(board: PersonBoard, personId: string): PersonBoard {
+  const found = board.columns.some((column) => column.people.some((person) => person.id === personId));
+  if (!found) return board;
+  const columns = board.columns.map((column) => {
+    const people = column.people.filter((person) => person.id !== personId);
+    return { ...column, people, count: people.length };
+  });
+  return { ...board, columns, total: Math.max(0, board.total - 1) };
+}
+
 function BoardEditor({ draft, counts, canDelete, busy, error, onChange, onSave, onDelete, onCancel }: {
   draft: BoardDraft;
   counts: Record<string, number>;
@@ -288,6 +504,9 @@ function BoardEditor({ draft, counts, canDelete, busy, error, onChange, onSave, 
   onDelete: () => void;
   onCancel: () => void;
 }) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+
   const changeStage = (index: number, name: string) => {
     onChange({ ...draft, stages: draft.stages.map((stage, itemIndex) => itemIndex === index ? { ...stage, name } : stage) });
   };
@@ -303,6 +522,19 @@ function BoardEditor({ draft, counts, canDelete, busy, error, onChange, onSave, 
     if (stage.id && counts[stage.id]) return;
     onChange({ ...draft, stages: draft.stages.filter((_, itemIndex) => itemIndex !== index) });
   };
+  const dropStage = (target: number) => {
+    if (dragIndex === null || dragIndex === target) {
+      setDragIndex(null);
+      setDropIndex(null);
+      return;
+    }
+    const stages = [...draft.stages];
+    const [moved] = stages.splice(dragIndex, 1);
+    stages.splice(target, 0, moved);
+    onChange({ ...draft, stages });
+    setDragIndex(null);
+    setDropIndex(null);
+  };
 
   return (
     <section className="board-editor" aria-label={draft.id ? 'Edit board' : 'Create board'}>
@@ -317,12 +549,34 @@ function BoardEditor({ draft, counts, canDelete, busy, error, onChange, onSave, 
         <span>Board name</span>
         <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} autoFocus />
       </label>
-      <div className="board-editor-label"><span>Columns</span><small>Drag cards between these stages on the board.</small></div>
+      <div className="board-editor-label"><span>Columns</span><small>Grab a row to change the workflow order.</small></div>
       <div className="board-column-editor">
         {draft.stages.map((stage, index) => {
           const occupied = Boolean(stage.id && counts[stage.id]);
           return (
-            <div className="board-column-row" key={`${stage.id || 'new'}-${index}`}>
+            <div
+              className={`board-column-row${dragIndex === index ? ' is-dragging' : ''}${dropIndex === index && dragIndex !== index ? ' is-drop-target' : ''}`}
+              key={`${stage.id || 'new'}-${index}`}
+              onDragEnter={(event) => { if (dragIndex !== null) { event.preventDefault(); setDropIndex(index); } }}
+              onDragOver={(event) => { if (dragIndex !== null) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }}
+              onDrop={(event) => { event.preventDefault(); dropStage(index); }}
+            >
+              <button
+                type="button"
+                className="board-column-grab"
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('application/x-pigeon-board-stage', String(index));
+                  setDragIndex(index);
+                  setDropIndex(index);
+                }}
+                onDragEnd={() => { setDragIndex(null); setDropIndex(null); }}
+                aria-label={`Drag ${stage.name || `column ${index + 1}`} to reorder`}
+                title="Drag to reorder"
+              >
+                ⠿
+              </button>
               <span className="board-column-number">{index + 1}</span>
               <input value={stage.name} onChange={(event) => changeStage(index, event.target.value)} aria-label={`Column ${index + 1} name`} />
               {occupied && <small>{counts[stage.id]} here</small>}

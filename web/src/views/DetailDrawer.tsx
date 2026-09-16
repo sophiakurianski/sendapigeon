@@ -11,6 +11,7 @@ import {
 } from '../api';
 import { Drawer, Facts, SectionTitle } from '../components/Drawer';
 import { Monogram, Postmark, daysSince } from '../components/Pigeon';
+import { TagList } from '../components/Tag';
 import { dueClass, markdown, money, relativeDay, today } from '../lib';
 
 export interface Selection {
@@ -127,7 +128,7 @@ function DealPanel({
               ['Source', deal.source],
               ['Owner', deal.owner],
               ['Lost because', deal.lostReason],
-              ['Tags', (deal.tags ?? []).map((t) => <span className="tag" key={t}>{t}</span>)],
+              ['Tags', deal.tags?.length ? <TagList tags={deal.tags} max={8} /> : null],
             ]}
           />
         </div>
@@ -231,7 +232,7 @@ function PersonPanel({
               ['LinkedIn', person.linkedin ? <a href={person.linkedin} target="_blank" rel="noreferrer">{person.linkedin}</a> : null],
               ['Location', person.location],
               ['Owner', person.owner],
-              ['Tags', (person.tags ?? []).map((t) => <span className="tag" key={t}>{t}</span>)],
+              ['Tags', person.tags?.length ? <TagList tags={person.tags} max={8} /> : null],
             ]}
           />
           {person.description && <p>{person.description}</p>}
@@ -416,7 +417,7 @@ function CompanyPanel({
           ['Location', company.location],
           ['Phone', company.phone],
           ['Owner', company.owner],
-          ['Tags', (company.tags ?? []).map((t) => <span className="tag" key={t}>{t}</span>)],
+          ['Tags', company.tags?.length ? <TagList tags={company.tags} max={8} /> : null],
         ]}
       />
       {company.description && <p>{company.description}</p>}
@@ -469,6 +470,7 @@ function NotePanel({ note, onClose, onSelect }: { note: Note; onClose: () => voi
               {a}
             </button>
           ))],
+          ['Tags', note.tags?.length ? <TagList tags={note.tags} max={8} /> : null],
           ['File', <span className="mono">{note.path}</span>],
         ]}
       />
@@ -486,13 +488,16 @@ function PersonStageProgress({ person, notify, reload }: {
 }) {
   const [boards, setBoards] = useState<PeopleBoardTemplate[]>([]);
   const [busy, setBusy] = useState(false);
+  const [selectedBoard, setSelectedBoard] = useState(person.boardId ?? '');
 
   useEffect(() => {
     api.config().then((config) => setBoards(config.peopleBoards)).catch(() => setBoards([]));
   }, []);
 
+  useEffect(() => setSelectedBoard(person.boardId ?? ''), [person.boardId]);
+
   if (!boards.length) return null;
-  const board = boards.find((item) => item.id === person.boardId) ?? boards[0];
+  const board = boards.find((item) => item.id === (selectedBoard || person.boardId)) ?? boards[0];
   const stages = board.stages;
   const currentId = person.stage ?? stages[0].id;
   const currentIndex = Math.max(0, stages.findIndex((stage) => stage.id === currentId));
@@ -530,6 +535,55 @@ function PersonStageProgress({ person, notify, reload }: {
     }
   };
 
+  const addToFlow = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await api.movePersonBoard(person.id, board.id);
+      notify(result.todo
+        ? `${person.name} added to ${board.name} · next: ${result.todo.title}`
+        : `${person.name} added to ${board.name}`);
+      reload();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeFromFlow = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.removePersonFromWorkflow(person.id);
+      notify(`${person.name} removed from the workflow`);
+      reload();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (person.workflowExcluded) {
+    return (
+      <>
+        <SectionTitle aside="Not on a board">Board stages</SectionTitle>
+        <div className="workflow-offboard">
+          <span className="workflow-offboard-mark" aria-hidden="true">—</span>
+          <div>
+            <b>Outside the workflow</b>
+            <p>This contact stays in your CRM without a stage or generated workflow task.</p>
+          </div>
+          <select value={board.id} onChange={(event) => setSelectedBoard(event.target.value)} disabled={busy} aria-label="Board to add this person to">
+            {boards.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          <button className="btn" onClick={() => void addToFlow()} disabled={busy}>{busy ? 'Adding…' : 'Add to flow'}</button>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <SectionTitle aside={`${currentIndex + 1} of ${stages.length}`}>Board stages</SectionTitle>
@@ -559,6 +613,7 @@ function PersonStageProgress({ person, notify, reload }: {
           );
         })}
       </div>
+      <button className="workflow-remove-button" onClick={() => void removeFromFlow()} disabled={busy}>Remove from flow</button>
     </>
   );
 }

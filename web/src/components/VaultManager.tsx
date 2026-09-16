@@ -4,6 +4,25 @@ import { PigeonMark } from './Pigeon';
 
 type FormMode = 'create' | 'open' | null;
 
+const preferredCurrencies = ['AUD', 'USD', 'EUR', 'GBP', 'NZD', 'CAD', 'SGD', 'JPY'];
+const fallbackCurrencies = [...preferredCurrencies, 'CNY', 'HKD', 'INR', 'CHF', 'SEK', 'NOK', 'DKK', 'ZAR'];
+const currencyNames = new Intl.DisplayNames(undefined, { type: 'currency' });
+const supportedCurrencies = typeof Intl.supportedValuesOf === 'function'
+  ? Intl.supportedValuesOf('currency')
+  : fallbackCurrencies;
+const currencies = [...new Set([...preferredCurrencies, ...supportedCurrencies])]
+  .map((code) => ({ code, name: currencyNames.of(code) ?? code }))
+  .sort((a, b) => {
+    const aPreferred = preferredCurrencies.indexOf(a.code);
+    const bPreferred = preferredCurrencies.indexOf(b.code);
+    if (aPreferred >= 0 || bPreferred >= 0) {
+      if (aPreferred < 0) return 1;
+      if (bPreferred < 0) return -1;
+      return aPreferred - bPreferred;
+    }
+    return a.name.localeCompare(b.name);
+  });
+
 export function VaultManager({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [vaults, setVaults] = useState<VaultSummary[]>([]);
   const [mode, setMode] = useState<FormMode>(null);
@@ -53,6 +72,20 @@ export function VaultManager({ open, onClose }: { open: boolean; onClose: () => 
       window.location.reload();
     } catch (caught) {
       setError((caught as Error).message);
+      setBusy('');
+    }
+  };
+
+  const chooseFolder = async () => {
+    if (busy) return;
+    setBusy('picker');
+    setError('');
+    try {
+      const picked = await api.pickFolder(path.trim());
+      if (picked.path) setPath(picked.path);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
       setBusy('');
     }
   };
@@ -134,20 +167,34 @@ export function VaultManager({ open, onClose }: { open: boolean; onClose: () => 
               )}
               <label className="vault-path-field">
                 <span>Folder path</span>
-                <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="~/Documents/Studio Contacts" required autoFocus={mode === 'open'} />
-                <small>The folder stays on this computer and must be accessible to the SendAPigeon server.</small>
+                <span className="vault-path-control">
+                  <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="~/Documents/Studio Contacts" required autoFocus={mode === 'open'} />
+                  <button type="button" className="vault-folder-button" onClick={() => void chooseFolder()} disabled={Boolean(busy)}>
+                    <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
+                      <path d="M2.5 5.25h5l1.4 1.7h8.6v7.8H2.5z" />
+                      <path d="M2.5 7V4.1h4.4l1.5 1.8" />
+                    </svg>
+                    {busy === 'picker' ? 'Choosing…' : 'Choose…'}
+                  </button>
+                </span>
+                <small>Pick a folder on this computer or paste its path. You can create a new folder in the picker.</small>
               </label>
               {mode === 'create' && (
-                <label>
+                <label className="vault-currency-field">
                   <span>Currency</span>
-                  <input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} maxLength={3} placeholder="AUD" required />
+                  <select value={currency} onChange={(event) => setCurrency(event.target.value)} required>
+                    {currencies.map((item) => (
+                      <option value={item.code} key={item.code}>{item.code} — {item.name}</option>
+                    ))}
+                  </select>
+                  <small>Used for deal values and pipeline totals.</small>
                 </label>
               )}
               {error && <div className="form-error vault-form-error" role="alert">{error}</div>}
               <div className="vault-form-actions">
                 <button type="button" className="btn ghost" onClick={() => setMode(null)}>Cancel</button>
                 <button className="btn" disabled={Boolean(busy)}>
-                  {busy ? 'Opening…' : mode === 'create' ? 'Create and open' : 'Open vault'}
+                  {busy && busy !== 'picker' ? mode === 'create' ? 'Creating…' : 'Opening…' : mode === 'create' ? 'Create and open' : 'Open vault'}
                 </button>
               </div>
             </form>

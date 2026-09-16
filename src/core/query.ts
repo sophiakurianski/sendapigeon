@@ -195,7 +195,7 @@ export interface PersonBoard { id: string; name: string; columns: PersonBoardCol
 /** One named contact workflow and the people assigned to it. */
 export function personBoard(vault: Vault, boardId?: string): PersonBoard {
   const template = vault.requirePeopleBoard(boardId);
-  const people = vault.people().filter((person) => !person.archived && vault.personBoardId(person) === template.id);
+  const people = vault.people().filter((person) => !person.archived && !person.workflowExcluded && vault.personBoardId(person) === template.id);
   const todos = vault.todos();
   const firstStage = template.stages[0]?.id;
   const defaultId = vault.peopleBoards[0]?.id;

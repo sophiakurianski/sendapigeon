@@ -46,6 +46,8 @@ export interface Person extends BaseRecord {
   boardId?: string;
   /** Set when the final workflow stage is checked off. */
   stageCompletedAt?: string;
+  /** Keeps the contact in the CRM while excluding them from workflow boards. */
+  workflowExcluded?: boolean;
   location?: string;
   owner?: string;
   description?: string;

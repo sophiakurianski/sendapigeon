@@ -1,8 +1,11 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Vault, VaultError } from '../core/store.js';
 import { expandHome, forgetVault, rememberedVaults, rememberVault } from '../core/config.js';
@@ -30,6 +33,7 @@ export interface ServerOptions {
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const execFileAsync = promisify(execFile);
 
 /** Web assets live next to the compiled server in dist/, or in web/dist in dev. */
 function webRoot(): string | null {
@@ -79,6 +83,69 @@ function vaultRevision(path: string): string {
   visit(vault.paths.data);
   visit(vault.paths.notes);
   return hash.digest('hex');
+}
+
+function nearestExistingDirectory(input: string): string {
+  let candidate = resolve(expandHome(input || homedir()));
+  while (!existsSync(candidate) && dirname(candidate) !== candidate) candidate = dirname(candidate);
+  if (existsSync(candidate) && !statSync(candidate).isDirectory()) candidate = dirname(candidate);
+  return candidate;
+}
+
+async function runFolderPicker(command: string, args: string[]): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(command, args, { encoding: 'utf8' });
+    return stdout.trim() || null;
+  } catch (error) {
+    const code = (error as { code?: string | number }).code;
+    if (code === 1) return null;
+    throw error;
+  }
+}
+
+/** Opens the host operating system's folder chooser. Returns null on cancel. */
+async function pickFolder(initialPath: string): Promise<string | null> {
+  const initial = nearestExistingDirectory(initialPath);
+  if (process.platform === 'darwin') {
+    const script = `on run argv
+      set initialPath to item 1 of argv
+      try
+        set initialFolder to POSIX file initialPath as alias
+        set pickedFolder to choose folder with prompt "Choose a folder for your SendAPigeon vault" default location initialFolder
+        return POSIX path of pickedFolder
+      on error number -128
+        return ""
+      end try
+    end run`;
+    return runFolderPicker('osascript', ['-e', script, '--', initial]);
+  }
+  if (process.platform === 'win32') {
+    const script = `Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = 'Choose a folder for your SendAPigeon vault'
+$dialog.ShowNewFolderButton = $true
+if ($args.Count -gt 0 -and (Test-Path -LiteralPath $args[0])) { $dialog.SelectedPath = $args[0] }
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }`;
+    return runFolderPicker('powershell.exe', ['-NoProfile', '-STA', '-Command', script, initial]);
+  }
+  if (process.platform === 'linux') {
+    try {
+      return await runFolderPicker('zenity', ['--file-selection', '--directory', '--title=Choose a folder for your SendAPigeon vault', `--filename=${initial}/`]);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      try {
+        return await runFolderPicker('kdialog', ['--getexistingdirectory', initial, 'Choose a folder for your SendAPigeon vault']);
+      } catch (fallbackError) {
+        if ((fallbackError as NodeJS.ErrnoException).code !== 'ENOENT') throw fallbackError;
+      }
+    }
+  }
+  throw new VaultError('A native folder picker is not available on this system. Enter the folder path manually.', 'NOT_SUPPORTED');
+}
+
+function isLoopback(req: Request): boolean {
+  const address = req.socket.remoteAddress;
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 }
 
 export function createApp(vaultPath: string, options: { persistVaultSelection?: boolean } = {}) {
@@ -160,10 +227,10 @@ export function createApp(vaultPath: string, options: { persistVaultSelection?: 
       version: '0.1.0',
       vault: activeVaultPath,
       endpoints: [
-        'GET|POST /api/vaults', 'POST /api/vaults/{open,switch}', 'DELETE /api/vaults',
+        'GET|POST /api/vaults', 'POST /api/vaults/{open,switch}', 'DELETE /api/vaults', 'POST /api/system/pick-folder',
         'GET /api/config', 'GET /api/revision', 'GET /api/stats', 'GET /api/board', 'GET /api/people-board', 'POST|PATCH|DELETE /api/people-boards', 'GET /api/search?q=',
         'GET|POST /api/companies', 'GET|PATCH|DELETE /api/companies/:id',
-        'GET|POST /api/people', 'GET|PATCH|DELETE /api/people/:id', 'POST /api/people/:id/stage/{ensure,advance,move}',
+        'GET|POST /api/people', 'GET|PATCH|DELETE /api/people/:id', 'POST /api/people/:id/stage/{ensure,advance,move}', 'POST /api/people/:id/board/remove',
         'GET|POST /api/deals', 'GET|PATCH|DELETE /api/deals/:id',
         'POST /api/deals/:id/move', 'POST /api/deals/:id/win', 'POST /api/deals/:id/lose',
         'GET|POST /api/todos', 'GET|PATCH|DELETE /api/todos/:id', 'POST /api/todos/:id/toggle',
@@ -200,6 +267,18 @@ export function createApp(vaultPath: string, options: { persistVaultSelection?: 
     if (persistVaultSelection) forgetVault(path);
     return { path, forgotten: true, deleted: false };
   }));
+  api.post('/system/pick-folder', async (req, res, next) => {
+    if (!isLoopback(req)) {
+      res.status(403).json({ ok: false, error: 'The folder picker is only available from this computer.', code: 'FORBIDDEN' });
+      return;
+    }
+    try {
+      const initial = String(req.body?.initialPath ?? dirname(activeVaultPath));
+      res.json({ path: await pickFolder(initial) });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   api.get('/config', wrap((_req, _res, v) => v.config));
   api.get('/revision', manage(() => ({ vault: activeVaultPath, revision: vaultRevision(activeVaultPath) })));
@@ -226,6 +305,7 @@ export function createApp(vaultPath: string, options: { persistVaultSelection?: 
   api.get('/people/:id', wrap((req, _res, v) => expandPerson(v, v.requirePerson(req.params.id))));
   api.patch('/people/:id', wrap((req, _res, v) => v.updatePerson(req.params.id, req.body, { createCompany: true })));
   api.post('/people/:id/board', wrap((req, _res, v) => v.movePersonBoard(req.params.id, String(req.body?.boardId ?? ''))));
+  api.post('/people/:id/board/remove', wrap((req, _res, v) => v.removePersonFromWorkflow(req.params.id)));
   api.post('/people/:id/stage/advance', wrap((req, _res, v) => v.advancePersonStage(req.params.id)));
   api.post('/people/:id/stage/move', wrap((req, _res, v) => v.movePersonStage(req.params.id, String(req.body?.stage ?? ''))));
   api.post('/people/:id/stage/ensure', wrap((req, _res, v) => v.ensurePersonStageTodo(req.params.id)));

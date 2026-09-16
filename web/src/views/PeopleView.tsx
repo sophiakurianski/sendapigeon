@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, type Company, type Person } from '../api';
 import { Empty } from '../components/Drawer';
 import { Monogram, PigeonWaiting } from '../components/Pigeon';
+import { TagFilter, TagList } from '../components/Tag';
 import { relativeDay } from '../lib';
 import type { ViewProps } from './types';
 
@@ -36,6 +37,7 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
   const [sort, setSort] = useState<Sort>('name');
   const [query, setQuery] = useState('');
   const [location, setLocation] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [shown, setShown] = useState<Attribute[]>(['title', 'location']);
   const [addOpen, setAddOpen] = useState(false);
 
@@ -57,16 +59,23 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
     return Array.from(new Set(people.map((p) => valueFor(p, 'location', companies)).filter(Boolean))).sort();
   }, [people, companies]);
 
+  const tags = useMemo(
+    () => Array.from(new Set(people.flatMap((person) => person.tags ?? []))).sort((a, b) => a.localeCompare(b)),
+    [people],
+  );
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const list = people.filter((person) => {
       const company = person.companyId ? companies[person.companyId]?.name ?? '' : '';
       const personLocation = valueFor(person, 'location', companies);
-      const haystack = [person.name, person.title, company, personLocation, person.email, person.phone, person.linkedin, person.owner]
+      const haystack = [person.name, person.title, company, personLocation, person.email, person.phone, person.linkedin, person.owner, ...(person.tags ?? [])]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
-      return (!needle || haystack.includes(needle)) && (!location || personLocation === location);
+      return (!needle || haystack.includes(needle))
+        && (!location || personLocation === location)
+        && (!selectedTags.length || selectedTags.some((tag) => person.tags?.includes(tag)));
     });
 
     return [...list].sort((a, b) => {
@@ -77,7 +86,7 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
       const bv = sort === 'name' ? b.name : valueFor(b, field, companies);
       return (av || '\uffff').localeCompare(bv || '\uffff') || a.name.localeCompare(b.name);
     });
-  }, [people, companies, query, location, sort]);
+  }, [people, companies, query, location, selectedTags, sort]);
 
   const studios = useMemo(() => {
     const map = new Map<string, Person[]>();
@@ -161,6 +170,7 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
         </button>
 
         <span className="people-result-count">{filtered.length} shown</span>
+        <TagFilter tags={tags} value={selectedTags} onChange={setSelectedTags} multiple />
       </div>
 
       {addOpen && (
@@ -180,14 +190,17 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
         </Empty>
       ) : !filtered.length ? (
         <Empty icon={<PigeonWaiting size={50} />} title="No people match">
-          Clear the name or location filter to see everyone again.
+          Clear the name, location, or tag filter to see everyone again.
         </Empty>
       ) : mode === 'az' || mode === 'recent' ? (
         <div className="rows people-rows">
           {filtered.map((person) => (
             <button className="row person-row" key={person.id} onClick={() => onSelect({ kind: 'person', id: person.id })}>
               <Monogram name={person.name} id={person.id} size="sm" />
-              <span className="person-main"><span className="person-name">{person.name}</span></span>
+              <span className="person-main">
+                <span className="person-name">{person.name}</span>
+                <TagList tags={person.tags} className="person-tag-list" />
+              </span>
               <PersonAttributes
                 person={person}
                 shown={mode === 'recent' && !shown.includes('created') ? [...shown, 'created'] : shown}
@@ -215,7 +228,10 @@ export function PeopleView({ onSelect, notify, refresh, version }: ViewProps) {
                 {studio.members.map((person) => (
                   <button className="person" key={person.id} onClick={() => onSelect({ kind: 'person', id: person.id })}>
                     <Monogram name={person.name} id={person.id} size="sm" />
-                    <span className="person-main"><span className="person-name">{person.name}</span></span>
+                    <span className="person-main">
+                      <span className="person-name">{person.name}</span>
+                      <TagList tags={person.tags} className="person-tag-list" />
+                    </span>
                     <PersonAttributes person={person} shown={shown.filter((field) => field !== 'company')} companies={companies} />
                   </button>
                 ))}
